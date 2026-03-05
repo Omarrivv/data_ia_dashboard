@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  # MongoDB Database
+  mongodb:
+    image: mongo:7.0
+    container_name: dashboard-platform-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_DATABASE: dashboard-platform
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - dashboard-network
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dashboard-platform-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      MONGODB_URI: mongodb://admin:password123@mongodb:27017/dashboard-platform?authSource=admin
+      JWT_SECRET: your-super-secure-jwt-secret-change-in-production
+      GEMINI_API_KEY: AIzaSyAoF1cm2X9C5bOrqEZuIT2tZVN6-cV5aAI
+      FRONTEND_URL: http://localhost:3000
+      RATE_LIMIT_WINDOW_MS: 900000
+      RATE_LIMIT_MAX_REQUESTS: 100
+      MAX_FILE_SIZE: 10485760
+      UPLOAD_DIR: uploads
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend/uploads:/app/uploads
+    depends_on:
+      - mongodb
+    networks:
+      - dashboard-network
+
+  # Frontend Next.js
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dashboard-platform-frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: http://localhost:5000/api
+      NEXT_PUBLIC_APP_NAME: Dashboard Platform
+      NEXT_PUBLIC_APP_DESCRIPTION: Plataforma de dashboards dinámicos con IA
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - dashboard-network
+
+volumes:
+  mongodb_data:
+    driver: local
+
+networks:
+  dashboard-network:
+    driver: bridge
