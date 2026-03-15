@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -50,6 +50,93 @@ function renderMarkdown(text: string) {
     );
   });
 }
+
+// Descripciones amigables para ejecutivos no técnicos
+const TYPE_META: Record<string, { label: string; color: string; bg: string; border: string; icon: string; hint: string }> = {
+  number: {
+    label: 'Número',
+    color: 'text-blue-700',
+    bg: 'bg-blue-50',
+    border: 'border-blue-200',
+    icon: '#',
+    hint: 'Valor numérico — se puede sumar, promediar y graficar',
+  },
+  date: {
+    label: 'Fecha',
+    color: 'text-violet-700',
+    bg: 'bg-violet-50',
+    border: 'border-violet-200',
+    icon: '◷',
+    hint: 'Fecha o tiempo — permite ver tendencias y evolución',
+  },
+  string: {
+    label: 'Texto',
+    color: 'text-gray-600',
+    bg: 'bg-gray-50',
+    border: 'border-gray-200',
+    icon: 'A',
+    hint: 'Categoría o texto — permite agrupar y segmentar',
+  },
+};
+
+function DatasetColumns({ columns }: { columns: Array<{ name: string; type: string }> }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const VISIBLE = 14;
+  const shown = expanded ? columns : columns.slice(0, VISIBLE);
+  const hidden = columns.length - VISIBLE;
+
+  return (
+    <div className="border-t border-gray-100 pt-3 mt-2">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+          {columns.length} campos del dataset
+        </span>
+        <div className="flex items-center gap-3 text-[11px] text-gray-400">
+          {Object.entries(TYPE_META).map(([type, meta]) => (
+            <span key={type} className="flex items-center gap-1">
+              <span className={`inline-flex items-center justify-center w-4 h-4 rounded text-[10px] font-bold ${meta.bg} ${meta.color} border ${meta.border}`}>
+                {meta.icon}
+              </span>
+              {meta.label}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {shown.map((col) => {
+          const meta = TYPE_META[col.type] ?? TYPE_META.string;
+          return (
+            <span
+              key={col.name}
+              title={`${col.name} — ${meta.hint}`}
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium border cursor-default transition-all hover:shadow-sm ${meta.bg} ${meta.color} ${meta.border}`}
+            >
+              <span className="font-bold text-[10px] opacity-60">{meta.icon}</span>
+              {col.name}
+            </span>
+          );
+        })}
+        {!expanded && hidden > 0 && (
+          <button
+            onClick={() => setExpanded(true)}
+            className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200 hover:bg-gray-200 transition-colors"
+          >
+            +{hidden} más
+          </button>
+        )}
+        {expanded && hidden > 0 && (
+          <button
+            onClick={() => setExpanded(false)}
+            className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200 hover:bg-gray-200 transition-colors"
+          >
+            Ver menos
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
@@ -372,7 +459,7 @@ export default function ProjectDetailPage() {
             <div className="flex items-start space-x-4 min-w-0">
               <button
                 onClick={() => router.push('/dashboard/projects')}
-                className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 flex-shrink-0 mt-1"
+                className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 flex-shrink-0 mt-0.5"
               >
                 <ArrowLeftIcon className="h-4 w-4 mr-2" />
                 Volver
@@ -380,9 +467,13 @@ export default function ProjectDetailPage() {
 
               <div className="min-w-0">
                 <h1 className="text-2xl font-bold text-gray-900 truncate">{project.name}</h1>
-                {project.description && (
-                  <p className="text-gray-500 mt-1 text-sm line-clamp-2 max-w-2xl">{project.description}</p>
-                )}
+                {(() => {
+                  const desc = project.description || '';
+                  // Si la descripción parece una lista de columnas (muchas comas, sin espacios largos), no mostrarla
+                  const isColumnList = (desc.match(/,/g) || []).length > 5 && desc.split(' ').length < desc.split(',').length * 1.5;
+                  if (!desc || isColumnList) return null;
+                  return <p className="text-gray-500 mt-1 text-sm line-clamp-2 max-w-2xl">{desc}</p>;
+                })()}
               </div>
             </div>
 
@@ -603,33 +694,7 @@ export default function ProjectDetailPage() {
                           </div>
                         </div>
                         {dataset.metadata?.columns && dataset.metadata.columns.length > 0 && (
-                          <div className="border-t border-gray-100 pt-3 mt-1">
-                            <p className="text-xs font-medium text-gray-500 mb-2">
-                              {dataset.metadata.columns.length} columnas detectadas:
-                            </p>
-                            <div className="flex flex-wrap gap-1.5 max-h-24 overflow-hidden">
-                              {dataset.metadata.columns.slice(0, 16).map((col) => {
-                                const typeIcon = col.type === 'number' ? '#' : col.type === 'date' ? '📅' : 'A';
-                                const typeLabel = col.type === 'number' ? 'Numérico' : col.type === 'date' ? 'Fecha' : 'Texto';
-                                const tooltip = `${col.name} — ${typeLabel}`;
-                                return (
-                                  <span
-                                    key={col.name}
-                                    title={tooltip}
-                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-gray-50 border border-gray-200 text-gray-700 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-700 transition-colors cursor-default"
-                                  >
-                                    <span className="text-gray-400 text-[10px]">{typeIcon}</span>
-                                    {col.name}
-                                  </span>
-                                );
-                              })}
-                              {dataset.metadata.columns.length > 16 && (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs bg-gray-100 text-gray-500 border border-gray-200">
-                                  +{dataset.metadata.columns.length - 16} más
-                                </span>
-                              )}
-                            </div>
-                          </div>
+                          <DatasetColumns columns={dataset.metadata.columns} />
                         )}
                       </div>
                     ))}
