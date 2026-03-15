@@ -368,23 +368,25 @@ export default function ProjectDetailPage() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Header */}
         <div className="mb-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start space-x-4 min-w-0">
               <button
                 onClick={() => router.push('/dashboard/projects')}
-                className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 flex-shrink-0 mt-1"
               >
                 <ArrowLeftIcon className="h-4 w-4 mr-2" />
                 Volver
               </button>
 
-              <div>
-                <h1 className="text-3xl font-bold text-gray-900">{project.name}</h1>
-                <p className="text-gray-600 mt-1">{project.description}</p>
+              <div className="min-w-0">
+                <h1 className="text-2xl font-bold text-gray-900 truncate">{project.name}</h1>
+                {project.description && (
+                  <p className="text-gray-500 mt-1 text-sm line-clamp-2 max-w-2xl">{project.description}</p>
+                )}
               </div>
             </div>
 
-            <div className="flex items-center space-x-3">
+            <div className="flex items-center gap-2 flex-shrink-0">
               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                 {project.datasets?.length || 0} datasets
               </span>
@@ -392,26 +394,26 @@ export default function ProjectDetailPage() {
               <button
                 onClick={handleAnalyzeProject}
                 disabled={isAnalyzing || analyzeMutation.isPending}
-                className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
+                className="inline-flex items-center px-3 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
               >
-                <PlayIcon className="h-4 w-4 mr-2" />
+                <PlayIcon className="h-4 w-4 mr-1.5" />
                 {isAnalyzing ? 'Analizando…' : 'Analizar con IA'}
               </button>
 
               <button
                 onClick={() => router.push(`/dashboard/projects/${projectId}/edit`)}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
               >
-                <PencilIcon className="h-4 w-4 mr-2" />
+                <PencilIcon className="h-4 w-4 mr-1.5" />
                 Editar
               </button>
 
               <button
                 onClick={handleDeleteProject}
                 disabled={deleteMutation.isPending}
-                className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
+                className="inline-flex items-center px-3 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
               >
-                <TrashIcon className="h-4 w-4 mr-2" />
+                <TrashIcon className="h-4 w-4 mr-1.5" />
                 Eliminar
               </button>
             </div>
@@ -602,16 +604,29 @@ export default function ProjectDetailPage() {
                         </div>
                         {dataset.metadata?.columns && dataset.metadata.columns.length > 0 && (
                           <div className="border-t border-gray-100 pt-3 mt-1">
-                            <p className="text-xs font-medium text-gray-500 mb-1.5">Columnas detectadas:</p>
-                            <div className="flex flex-wrap gap-1">
-                              {dataset.metadata.columns.slice(0, 12).map((col) => (
-                                <span key={col.name} className="inline-flex items-center px-2 py-0.5 rounded text-xs bg-gray-50 border border-gray-200 text-gray-600">
-                                  {col.name}
-                                  <span className="ml-1 text-gray-400">{col.type === 'number' ? '#' : col.type === 'date' ? '📅' : 'A'}</span>
+                            <p className="text-xs font-medium text-gray-500 mb-2">
+                              {dataset.metadata.columns.length} columnas detectadas:
+                            </p>
+                            <div className="flex flex-wrap gap-1.5 max-h-24 overflow-hidden">
+                              {dataset.metadata.columns.slice(0, 16).map((col) => {
+                                const typeIcon = col.type === 'number' ? '#' : col.type === 'date' ? '📅' : 'A';
+                                const typeLabel = col.type === 'number' ? 'Numérico' : col.type === 'date' ? 'Fecha' : 'Texto';
+                                const tooltip = `${col.name} — ${typeLabel}`;
+                                return (
+                                  <span
+                                    key={col.name}
+                                    title={tooltip}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-gray-50 border border-gray-200 text-gray-700 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-700 transition-colors cursor-default"
+                                  >
+                                    <span className="text-gray-400 text-[10px]">{typeIcon}</span>
+                                    {col.name}
+                                  </span>
+                                );
+                              })}
+                              {dataset.metadata.columns.length > 16 && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs bg-gray-100 text-gray-500 border border-gray-200">
+                                  +{dataset.metadata.columns.length - 16} más
                                 </span>
-                              ))}
-                              {dataset.metadata.columns.length > 12 && (
-                                <span className="text-xs text-gray-400 self-center">+{dataset.metadata.columns.length - 12} más</span>
                               )}
                             </div>
                           </div>
