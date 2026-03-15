@@ -279,6 +279,11 @@ router.post('/:id/analyze', asyncHandler(async (req: express.Request, res: expre
       const dashboardWidgets: Widget[] = [];
       
       // Añadir visualizaciones reales
+      const VALID_CHART_TYPES = ['bar', 'line', 'pie', 'scatter', 'area'] as const;
+      type ValidChartType = typeof VALID_CHART_TYPES[number];
+      const sanitizeChartType = (t: string | undefined): ValidChartType =>
+        VALID_CHART_TYPES.includes(t as ValidChartType) ? (t as ValidChartType) : 'bar';
+
       validVisualizations.forEach((viz, index) => {
         const firstColumn = project.datasets[0]?.metadata?.columns?.[0]?.name || 'categoria';
         const secondColumn = project.datasets[0]?.metadata?.columns?.[1]?.name || 'valor';
@@ -289,7 +294,7 @@ router.post('/:id/analyze', asyncHandler(async (req: express.Request, res: expre
           title: viz.title || `Gráfico ${index + 1}`,
           description: viz.description || 'Visualización de datos',
           config: {
-            chartType: (viz.chartType as 'line' | 'bar' | 'pie' | 'scatter' | 'area') || 'bar',
+            chartType: sanitizeChartType(viz.chartType),
             dataSource: project.datasets[0]._id.toString(),
             xAxis: viz.dataColumns?.[0] || firstColumn,
             yAxis: viz.dataColumns?.[1] || secondColumn,
