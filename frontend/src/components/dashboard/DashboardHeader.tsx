@@ -8,13 +8,17 @@ import {
   ArrowRightOnRectangleIcon,
   CogIcon,
   ChevronDownIcon,
+  SunIcon,
+  MoonIcon,
 } from '@heroicons/react/24/outline';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import Link from 'next/link';
 import clsx from 'clsx';
 
 export function DashboardHeader() {
   const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
 
   const initials = (user?.name || 'U')
     .split(' ')
@@ -24,39 +28,48 @@ export function DashboardHeader() {
     .toUpperCase();
 
   return (
-    <div className="bg-white border-b border-gray-200 shadow-sm">
+    <div className="bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-700 shadow-sm">
       <div className="px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-16 items-center">
           <div className="flex items-center" />
 
           <div className="flex items-center gap-2">
+            {/* Theme toggle */}
+            <button
+              type="button"
+              onClick={toggleTheme}
+              title={theme === 'light' ? 'Cambiar a modo oscuro' : 'Cambiar a modo claro'}
+              className="p-2 rounded-lg text-gray-400 hover:text-gray-600 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {theme === 'light' ? <MoonIcon className="h-5 w-5" /> : <SunIcon className="h-5 w-5" />}
+            </button>
+
             {/* Notifications bell */}
             <div className="relative">
               <button
                 type="button"
-                className="p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="p-2 rounded-lg text-gray-400 hover:text-gray-600 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <BellIcon className="h-5 w-5" />
               </button>
-              {/* Static notification dot */}
-              <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
+              <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white dark:ring-slate-900" />
             </div>
 
             {/* Divider */}
-            <div className="h-6 w-px bg-gray-200 mx-1" />
+            <div className="h-6 w-px bg-gray-200 dark:bg-slate-700 mx-1" />
 
             {/* Profile dropdown */}
             <Menu as="div" className="relative">
-              <Menu.Button className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg hover:bg-gray-100 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 group">
+              <Menu.Button className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 group">
                 <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center shadow-sm flex-shrink-0">
                   <span className="text-xs font-bold text-white">{initials}</span>
                 </div>
                 <div className="hidden sm:block text-left">
-                  <p className="text-sm font-semibold text-gray-800 leading-tight max-w-[120px] truncate">
+                  <p className="text-sm font-semibold text-gray-800 dark:text-slate-200 leading-tight max-w-[120px] truncate">
                     {user?.name}
                   </p>
                 </div>
-                <ChevronDownIcon className="h-3.5 w-3.5 text-gray-400 group-hover:text-gray-600 transition-colors hidden sm:block" />
+                <ChevronDownIcon className="h-3.5 w-3.5 text-gray-400 group-hover:text-gray-600 dark:text-slate-500 transition-colors hidden sm:block" />
               </Menu.Button>
 
               <Transition
@@ -68,15 +81,14 @@ export function DashboardHeader() {
                 leaveFrom="transform opacity-100 scale-100"
                 leaveTo="transform opacity-0 scale-95"
               >
-                <Menu.Items className="absolute right-0 mt-2 w-56 rounded-xl shadow-lg bg-white ring-1 ring-gray-200 focus:outline-none z-50 overflow-hidden">
-                  {/* User info header */}
-                  <div className="px-4 py-3 bg-gradient-to-r from-slate-50 to-blue-50 border-b border-gray-100 flex items-center gap-3">
+                <Menu.Items className="absolute right-0 mt-2 w-56 rounded-xl shadow-lg bg-white dark:bg-slate-800 ring-1 ring-gray-200 dark:ring-slate-700 focus:outline-none z-50 overflow-hidden">
+                  <div className="px-4 py-3 bg-gradient-to-r from-slate-50 to-blue-50 dark:from-slate-700 dark:to-slate-700 border-b border-gray-100 dark:border-slate-600 flex items-center gap-3">
                     <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center flex-shrink-0 shadow-sm">
                       <span className="text-sm font-bold text-white">{initials}</span>
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-gray-900 truncate">{user?.name}</p>
-                      <p className="text-xs text-gray-500 truncate">{user?.email}</p>
+                      <p className="text-sm font-semibold text-gray-900 dark:text-slate-100 truncate">{user?.name}</p>
+                      <p className="text-xs text-gray-500 dark:text-slate-400 truncate">{user?.email}</p>
                     </div>
                   </div>
 
@@ -86,11 +98,11 @@ export function DashboardHeader() {
                         <Link
                           href="/dashboard/profile"
                           className={clsx(
-                            active ? 'bg-gray-50' : '',
-                            'flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 transition-colors'
+                            active ? 'bg-gray-50 dark:bg-slate-700' : '',
+                            'flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 dark:text-slate-300 transition-colors'
                           )}
                         >
-                          <UserCircleIcon className="h-4 w-4 text-gray-400" />
+                          <UserCircleIcon className="h-4 w-4 text-gray-400 dark:text-slate-500" />
                           Mi Perfil
                         </Link>
                       )}
@@ -101,25 +113,25 @@ export function DashboardHeader() {
                         <Link
                           href="/dashboard/settings"
                           className={clsx(
-                            active ? 'bg-gray-50' : '',
-                            'flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 transition-colors'
+                            active ? 'bg-gray-50 dark:bg-slate-700' : '',
+                            'flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 dark:text-slate-300 transition-colors'
                           )}
                         >
-                          <CogIcon className="h-4 w-4 text-gray-400" />
+                          <CogIcon className="h-4 w-4 text-gray-400 dark:text-slate-500" />
                           Configuración
                         </Link>
                       )}
                     </Menu.Item>
                   </div>
 
-                  <div className="border-t border-gray-100 py-1">
+                  <div className="border-t border-gray-100 dark:border-slate-600 py-1">
                     <Menu.Item>
                       {({ active }) => (
                         <button
                           onClick={logout}
                           className={clsx(
-                            active ? 'bg-red-50' : '',
-                            'flex items-center gap-3 w-full text-left px-4 py-2.5 text-sm text-red-600 transition-colors'
+                            active ? 'bg-red-50 dark:bg-red-900/20' : '',
+                            'flex items-center gap-3 w-full text-left px-4 py-2.5 text-sm text-red-600 dark:text-red-400 transition-colors'
                           )}
                         >
                           <ArrowRightOnRectangleIcon className="h-4 w-4" />
@@ -137,3 +149,4 @@ export function DashboardHeader() {
     </div>
   );
 }
+
