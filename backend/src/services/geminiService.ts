@@ -143,45 +143,84 @@ class GeminiService {
    * Crea el prompt para análisis de datos
    */
   private createAnalysisPrompt(dataset: Dataset): string {
-    const sampleData = dataset.data.slice(0, 10); // Muestra de los primeros 10 registros
-    const columns = dataset.metadata.columns.map(col => `${col.name} (${col.type})`).join(', ');
-    
-    return `
-Analiza el siguiente dataset y proporciona insights valiosos:
+    const columns = dataset.metadata.columns;
+    const numericCols = columns.filter(c => c.type === 'number');
+    const categoricalCols = columns.filter(c => c.type === 'string');
+    const dateCols = columns.filter(c => c.type === 'date');
 
-**Información del Dataset:**
-- Nombre: ${dataset.originalName}
-- Filas: ${dataset.metadata.rowCount}
-- Columnas: ${columns}
+    // Calcular cardinalidad aproximada de columnas categóricas usando la muestra
+    const sampleData = dataset.data.slice(0, 50);
+    const categoricalWithCardinality = categoricalCols.map(col => {
+      const uniqueVals = new Set(sampleData.map((row: any) => row[col.name])).size;
+      return { name: col.name, approxUnique: uniqueVals };
+    });
 
-**Muestra de datos (primeros 10 registros):**
-${JSON.stringify(sampleData, null, 2)}
+    // Columnas que NO deben usarse como eje X (IDs, alta cardinalidad, hashes)
+    const idLikePattern = /^(id|_id|uuid|key|hash|code|ref|transaction|order|record|row|index|seq)/i;
+    const badXAxisCols = categoricalWithCardinality
+      .filter(c => idLikePattern.test(c.name) || c.approxUnique > 20)
+      .map(c => c.name);
 
-**Instrucciones:**
-1. Identifica patrones, tendencias y anomalías importantes
-2. Proporciona insights estadísticos relevantes
-3. Sugiere 3-5 visualizaciones específicas con justificación
-4. Genera un resumen ejecutivo de los hallazgos
-5. Crea documentación técnica del dataset
+    // Columnas categóricas buenas para eje X (pocas categorías, no IDs)
+    const goodCategoricalForX = categoricalWithCardinality
+      .filter(c => !idLikePattern.test(c.name) && c.approxUnique <= 20)
+      .map(c => c.name);
 
-Responde en formato JSON con esta estructura:
+    const columnDetail = [
+      ...numericCols.map(c => `  - ${c.name} [NUMÉRICA] → apta para eje Y, cálculos y métricas`),
+      ...goodCategoricalForX.map(name => `  - ${name} [CATEGÓRICA - BUENA PARA EJE X, ~${categoricalWithCardinality.find(x => x.name === name)?.approxUnique} valores únicos]`),
+      ...badXAxisCols.map(name => `  - ${name} [IDENTIFICADOR/ALTA CARDINALIDAD - NO USAR COMO EJE X]`),
+      ...dateCols.map(c => `  - ${c.name} [FECHA] → apta para eje X en series temporales`),
+    ].join('\n');
+
+    const sampleStr = JSON.stringify(sampleData.slice(0, 5), null, 2);
+
+    return `Eres un experto en análisis de datos y visualización. Analiza el siguiente dataset y genera visualizaciones con SENTIDO REAL para el negocio.
+
+DATASET: "${dataset.originalName}"
+Registros totales: ${dataset.metadata.rowCount.toLocaleString()}
+
+COLUMNAS DISPONIBLES (lee con atención los tipos y restricciones):
+${columnDetail}
+
+MUESTRA DE DATOS (5 registros):
+${sampleStr}
+
+REGLAS CRÍTICAS PARA LAS VISUALIZACIONES:
+1. NUNCA uses columnas marcadas como [IDENTIFICADOR/ALTA CARDINALIDAD] en el eje X. Son IDs únicos y producen gráficos sin sentido.
+2. Para gráficos de barras y pie: el eje X DEBE ser una columna [CATEGÓRICA - BUENA PARA EJE X] con pocos valores únicos.
+3. Para gráficos de línea y área: el eje X debe ser una columna [FECHA] o una columna numérica que represente tiempo/secuencia.
+4. Para scatter: ambos ejes deben ser columnas [NUMÉRICA].
+5. El eje Y SIEMPRE debe ser una columna [NUMÉRICA].
+6. Cada gráfico debe responder una pregunta de negocio concreta y útil.
+7. Genera exactamente 4 visualizaciones, cada una con un tipo diferente si es posible.
+
+Responde ÚNICAMENTE con JSON válido, sin texto adicional ni bloques markdown:
 {
-  "insights": ["insight1", "insight2", ...],
-  "recommendations": ["recomendación1", "recomendación2", ...],
+  "insights": [
+    "insight concreto con números reales del dataset",
+    "patrón o tendencia identificada",
+    "anomalía o punto de atención",
+    "oportunidad de negocio detectada"
+  ],
+  "recommendations": [
+    "acción concreta basada en los datos",
+    "métrica a monitorear",
+    "segmento a investigar más"
+  ],
   "visualizations": [
     {
       "type": "chart",
-      "chartType": "bar|line|pie|scatter|area",
-      "title": "Título del gráfico",
-      "description": "Descripción detallada",
-      "dataColumns": ["columna1", "columna2"],
-      "reasoning": "Por qué esta visualización es útil"
+      "chartType": "bar",
+      "title": "Título descriptivo máx 40 chars",
+      "description": "Qué pregunta de negocio responde este gráfico",
+      "dataColumns": ["columna_eje_x", "columna_eje_y"],
+      "reasoning": "Por qué estas columnas específicas y este tipo de gráfico"
     }
   ],
-  "summary": "Resumen ejecutivo de los hallazgos",
-  "documentation": "Documentación técnica detallada en markdown"
-}
-`;
+  "summary": "Resumen ejecutivo de 2-3 oraciones orientado a decisiones de negocio",
+  "documentation": "Documentación técnica del dataset en markdown"
+}`;
   }
 
   /**
@@ -197,26 +236,30 @@ Responde en formato JSON con esta estructura:
     }));
 
     return `
-Genera un informe ejecutivo empresarial en HTML para el siguiente proyecto de an\u00e1lisis de datos.
+Genera un informe ejecutivo empresarial en HTML para el siguiente proyecto de análisis de datos.
 
 Proyecto: ${projectName}
-Descripci\u00f3n: ${projectDescription || 'Proyecto de an\u00e1lisis de datos'}
+Descripción: ${projectDescription || 'Proyecto de análisis de datos'}
 
-Datasets:
-${datasetSummaries.map(ds => `- ${ds.name}: ${ds.rows.toLocaleString()} registros, ${ds.columns} variables (${ds.columnNames})`).join('\n')}
+Datasets disponibles:
+${datasetSummaries.map(ds => `- ${ds.name}: ${ds.rows.toLocaleString()} registros, ${ds.columns} variables`).join('\n')}
+
+Variables por dataset (usar SOLO en la tabla de fuentes de información, NO en el encabezado ni en el título):
+${datasetSummaries.map(ds => `- ${ds.name}: ${ds.columnNames}`).join('\n')}
 
 El documento HTML debe tener el aspecto de un informe ejecutivo corporativo de alto nivel:
-- Fondo blanco puro (#ffffff), tipograf\u00eda 'Segoe UI' o Georgia
-- Tama\u00f1o base del cuerpo: 15px, interlineado 1.8
-- Encabezado con l\u00ednea divisoria y metadatos (fecha, versi\u00f3n, clasificaci\u00f3n)
-- Barra lateral izquierda con \u00edndice de secciones (texto gris discreto)
+- Fondo blanco puro (#ffffff), tipografía 'Segoe UI' o Georgia
+- Tamaño base del cuerpo: 15px, interlineado 1.8
+- Encabezado con línea divisoria y metadatos (fecha, versión, clasificación)
+- Barra lateral izquierda con índice de secciones (texto gris discreto)
 - h1 negro 2rem font-weight:700, h2 1.1rem uppercase letra-espaciado con borde inferior fino
-- P\u00e1rrafos en 0.98rem color #334155, texto justificado
+- Párrafos en 0.98rem color #334155, texto justificado
 - Tablas profesionales con encabezados #f1f5f9, bordes #e2e8f0, filas alternas
 - Sin emojis en absoluto
 - Sin gradientes ni colores de fondo en secciones
 - Paleta: #0f172a, #1e293b, #334155, #64748b, #e2e8f0, #f8fafc
 - Lenguaje ejecutivo orientado al negocio: claro, estratégico, orientado a decisiones y oportunidades empresariales. Evitar jerga técnica innecesaria. Hablar de impacto, valor, crecimiento, eficiencia y ventaja competitiva.
+- IMPORTANTE: El encabezado del documento solo debe contener el título del proyecto y la descripción ejecutiva. NUNCA mostrar la lista de columnas/variables en el encabezado ni debajo del título.
 
 Estructura del documento:
 1. Portada: t\u00edtulo del proyecto, descripci\u00f3n ejecutiva, fecha, versi\u00f3n
@@ -241,36 +284,57 @@ REQUISITOS OBLIGATORIOS:
    */
   private createVisualizationPrompt(dataset: Dataset): string {
     const columns = dataset.metadata.columns;
+    const sampleData = dataset.data.slice(0, 30);
+
     const numericColumns = columns.filter(col => col.type === 'number').map(col => col.name);
-    const categoricalColumns = columns.filter(col => col.type === 'string').map(col => col.name);
     const dateColumns = columns.filter(col => col.type === 'date').map(col => col.name);
 
-    return `
-Recomienda las mejores visualizaciones para este dataset:
+    // Detectar columnas categóricas con baja cardinalidad (buenas para agrupar)
+    const idLikePattern = /^(id|_id|uuid|key|hash|code|ref|transaction|order|record|row|index|seq)/i;
+    const categoricalGood = columns
+      .filter(col => col.type === 'string')
+      .map(col => {
+        const unique = new Set(sampleData.map((r: any) => r[col.name])).size;
+        return { name: col.name, unique };
+      })
+      .filter(c => !idLikePattern.test(c.name) && c.unique <= 20)
+      .map(c => `${c.name} (${c.unique} valores únicos)`);
 
-**Columnas numéricas:** ${numericColumns.join(', ')}
-**Columnas categóricas:** ${categoricalColumns.join(', ')}
-**Columnas de fecha:** ${dateColumns.join(', ')}
-**Total de filas:** ${dataset.metadata.rowCount}
+    const categoricalBad = columns
+      .filter(col => col.type === 'string')
+      .map(col => {
+        const unique = new Set(sampleData.map((r: any) => r[col.name])).size;
+        return { name: col.name, unique };
+      })
+      .filter(c => idLikePattern.test(c.name) || c.unique > 20)
+      .map(c => c.name);
 
-Responde en formato JSON con un array de recomendaciones:
+    return `Eres un experto en visualización de datos. Recomienda las mejores visualizaciones para este dataset.
+
+Dataset: "${dataset.originalName}" — ${dataset.metadata.rowCount.toLocaleString()} registros
+
+Columnas numéricas (aptas para eje Y): ${numericColumns.join(', ') || 'ninguna'}
+Columnas categóricas BUENAS para eje X (pocos valores únicos): ${categoricalGood.join(', ') || 'ninguna'}
+Columnas de fecha (aptas para eje X en series temporales): ${dateColumns.join(', ') || 'ninguna'}
+Columnas PROHIBIDAS para eje X (IDs o alta cardinalidad): ${categoricalBad.join(', ') || 'ninguna'}
+
+REGLAS:
+- Nunca uses columnas PROHIBIDAS como eje X
+- El eje Y siempre debe ser numérico
+- Cada visualización debe responder una pregunta de negocio real
+- Varía los tipos de gráfico (no repitas el mismo tipo)
+
+Responde ÚNICAMENTE con un array JSON válido:
 [
   {
     "type": "chart",
     "chartType": "bar|line|pie|scatter|area",
-    "title": "Título descriptivo",
-    "description": "Qué muestra esta visualización",
-    "dataColumns": ["columna1", "columna2"],
-    "reasoning": "Por qué es la mejor opción para estos datos"
+    "title": "Título descriptivo máx 40 chars",
+    "description": "Pregunta de negocio que responde",
+    "dataColumns": ["columna_x", "columna_y"],
+    "reasoning": "Por qué estas columnas y este tipo"
   }
-]
-
-Considera:
-- Tipos de datos disponibles
-- Relaciones entre variables
-- Mejores prácticas de visualización
-- Claridad y utilidad para el usuario
-`;
+]`;
   }
 
   /**
@@ -538,7 +602,11 @@ Considera:
 <main>
   <div class="doc-header">
     <h1>Informe Ejecutivo: ${projectName}</h1>
-    <p class="description">${projectDescription || 'El presente informe ejecutivo consolida los principales hallazgos, oportunidades de negocio y recomendaciones estrat\u00e9gicas derivadas del an\u00e1lisis de las fuentes de informaci\u00f3n disponibles. Su prop\u00f3sito es apoyar la toma de decisiones basada en datos.'}</p>
+    <p class="description">${
+      projectDescription && projectDescription.length <= 300
+        ? projectDescription
+        : 'El presente informe ejecutivo consolida los principales hallazgos, oportunidades de negocio y recomendaciones estratégicas derivadas del análisis de las fuentes de información disponibles. Su propósito es apoyar la toma de decisiones basada en datos.'
+    }</p>
     <div class="doc-meta">
       <div class="doc-meta-item"><span class="label">Fecha</span><span class="value">${date}</span></div>
       <div class="doc-meta-item"><span class="label">Versi\u00f3n</span><span class="value">1.0</span></div>
@@ -987,14 +1055,33 @@ Responde de forma natural y directa a LO QUE PIDE. Si pregunta por MRR, habla de
       ? `\nTítulos de gráficos ya existentes (evita repetirlos): ${existingWidgetTitles.join(', ')}`
       : '';
 
+    const idLikePattern = /^(id|_id|uuid|key|hash|code|ref|transaction|order|record|row|index|seq)/i;
+    const goodXCols = datasetColumns.filter(c =>
+      c.type === 'string' && !idLikePattern.test(c.name)
+    ).map(c => c.name);
+    const numericCols2 = datasetColumns.filter(c => c.type === 'number').map(c => c.name);
+    const dateCols2 = datasetColumns.filter(c => c.type === 'date').map(c => c.name);
+    const forbiddenCols = datasetColumns.filter(c =>
+      c.type === 'string' && idLikePattern.test(c.name)
+    ).map(c => c.name);
+
     const prompt = `Eres un experto en visualización de datos. El usuario quiere crear un gráfico personalizado para el dataset "${datasetName}".
 
-Columnas disponibles en el dataset: ${columnList}
+Columnas numéricas (aptas para eje Y): ${numericCols2.join(', ') || 'ninguna'}
+Columnas categóricas buenas para eje X: ${goodXCols.join(', ') || 'ninguna'}
+Columnas de fecha (aptas para eje X): ${dateCols2.join(', ') || 'ninguna'}
+Columnas PROHIBIDAS para eje X (IDs/alta cardinalidad): ${forbiddenCols.join(', ') || 'ninguna'}
 ${existingTitles}
 
 Petición del usuario: "${userPrompt}"
 
 Tu tarea: genera la configuración de UN ÚNICO gráfico que cumpla exactamente con lo que el usuario pide.
+
+REGLAS CRÍTICAS:
+- NUNCA uses columnas PROHIBIDAS como xAxis
+- xAxis debe ser una columna categórica buena o de fecha
+- yAxis SIEMPRE debe ser numérica
+- El gráfico debe tener sentido de negocio real
 
 Responde ÚNICAMENTE con un objeto JSON válido sin texto adicional, sin bloques de código markdown, sin comentarios. Solo el JSON puro:
 {
@@ -1006,9 +1093,8 @@ Responde ÚNICAMENTE con un objeto JSON válido sin texto adicional, sin bloques
   "colors": ["#hexcolor1", "#hexcolor2", "#hexcolor3"]
 }
 
-Reglas:
+Reglas adicionales:
 - El chartType debe ser el más adecuado para los datos y la petición del usuario
-- xAxis y yAxis deben ser nombres de columnas que EXISTEN en el dataset
 - Si el usuario pide un gráfico de pastel/pie, el xAxis es la categoría y yAxis el valor numérico
 - Los colores deben ser visualmente atractivos y apropiados para el tipo de gráfico
 - El título debe ser descriptivo y único`;
