@@ -38,7 +38,7 @@ export default function DashboardLayout({
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-gray-50" suppressHydrationWarning>
+      <div className="min-h-screen bg-gray-50 dark:bg-slate-950" suppressHydrationWarning>
         <DashboardSidebar />
         <div className="lg:pl-64" suppressHydrationWarning>
           <DashboardHeader />
