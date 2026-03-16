@@ -908,6 +908,83 @@ ${dateColumns.length > 0 ? `
   }
 
   /**
+   * Chat general sobre todo el proyecto (todos los datasets)
+   */
+  async chatAboutProject(
+    message: string,
+    context: {
+      projectName: string;
+      projectDescription?: string;
+      datasets: Array<{
+        name: string;
+        rowCount: number;
+        columns: Array<{ name: string; type: string }>;
+        sampleData: any[];
+      }>;
+      conversationHistory: Array<{ role: string; text: string }>;
+    }
+  ): Promise<string> {
+    const { projectName, projectDescription, datasets, conversationHistory } = context;
+
+    const datasetSummary = datasets.map(ds => {
+      const numericCols = ds.columns.filter(c => c.type === 'number').map(c => c.name);
+      const categoricalCols = ds.columns.filter(c => c.type === 'string').map(c => c.name);
+      const sample = ds.sampleData.slice(0, 3);
+      return `Dataset: ${ds.name} (${ds.rowCount.toLocaleString()} registros, ${ds.columns.length} columnas)
+  - Columnas numéricas: ${numericCols.join(', ') || 'ninguna'}
+  - Columnas categóricas: ${categoricalCols.join(', ') || 'ninguna'}
+  - Muestra: ${JSON.stringify(sample)}`;
+    }).join('\n\n');
+
+    const historyBlock = conversationHistory.length > 0
+      ? '\n\nConversación anterior:\n' +
+        conversationHistory.slice(-6).map(m => `${m.role === 'user' ? 'Usuario' : 'Asistente'}: ${m.text}`).join('\n')
+      : '';
+
+    const prompt = `Eres un analista de datos experto y amigable. Ayudas a entender los datos del proyecto "${projectName}" de forma clara y directa, usando lenguaje accesible para ejecutivos y personas no técnicas.
+
+PROYECTO: ${projectName}
+${projectDescription ? `Descripción: ${projectDescription}` : ''}
+
+DATOS DISPONIBLES:
+${datasetSummary}
+${historyBlock}
+
+El usuario pregunta: "${message}"
+
+Responde de forma natural, directa y útil. Usa los datos reales cuando sea posible. Si el usuario pregunta algo que no puedes responder con los datos disponibles, díselo claramente y sugiere qué información necesitarías. Máximo 4 párrafos cortos. Sin asteriscos ni títulos, solo texto conversacional.`;
+
+    try {
+      const result = await this.model.generateContent(prompt);
+      const response = await result.response;
+      return response.text().trim();
+    } catch (error) {
+      console.error('Error en chat general del proyecto:', error);
+      return this.fallbackProjectChat(message, context);
+    }
+  }
+
+  private fallbackProjectChat(
+    message: string,
+    ctx: { projectName: string; datasets: Array<{ name: string; rowCount: number; columns: Array<{ name: string; type: string }> }> }
+  ): string {
+    const totalRows = ctx.datasets.reduce((s, d) => s + d.rowCount, 0);
+    const totalCols = ctx.datasets.reduce((s, d) => s + d.columns.length, 0);
+    const msg = message.toLowerCase();
+
+    if (/cuántos|cuantos|registros|filas|datos/.test(msg)) {
+      return `El proyecto "${ctx.projectName}" contiene ${totalRows.toLocaleString()} registros en total distribuidos en ${ctx.datasets.length} dataset${ctx.datasets.length > 1 ? 's' : ''}.`;
+    }
+    if (/columnas|variables|campos/.test(msg)) {
+      return `El proyecto tiene ${totalCols} variables en total. ${ctx.datasets.map(d => `${d.name}: ${d.columns.map(c => c.name).join(', ')}`).join('. ')}`;
+    }
+    if (/qué|que|sobre|trata|analiza/.test(msg)) {
+      return `El proyecto "${ctx.projectName}" analiza ${totalRows.toLocaleString()} registros con ${totalCols} variables. Los datasets disponibles son: ${ctx.datasets.map(d => d.name).join(', ')}.`;
+    }
+    return `Estoy analizando el proyecto "${ctx.projectName}" con ${totalRows.toLocaleString()} registros y ${totalCols} variables. ¿Qué aspecto específico te gustaría explorar?`;
+  }
+
+  /**
    * Chat sobre un gráfico específico usando los datos reales
    */
   async chatAboutWidget(
