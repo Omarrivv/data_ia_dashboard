@@ -5,6 +5,7 @@ import { authenticate } from '../middleware/auth';
 import { asyncHandler, createError } from '../middleware/errorHandler';
 import { geminiService } from '../services/geminiService';
 import { ApiResponse, Widget, Dashboard } from '../types';
+import { getProjectAccess, getShareTokenFromRequest } from '../middleware/projectAccess';
 
 const router = express.Router();
 
@@ -56,14 +57,13 @@ router.get('/:projectId', asyncHandler(async (req: express.Request, res: express
     throw createError('Usuario no autenticado', 401);
   }
 
-  const project = await Project.findOne({
-    _id: req.params.projectId,
-    userId: req.user._id
-  });
+  const project = await Project.findById(req.params.projectId);
 
   if (!project) {
     throw createError('Proyecto no encontrado', 404);
   }
+
+  getProjectAccess(project, req.user._id.toString(), 'viewer', getShareTokenFromRequest(req));
 
   if (!project.dashboard) {
     throw createError('El proyecto no tiene dashboard generado', 404);
@@ -102,14 +102,13 @@ router.put('/:projectId', asyncHandler(async (req: express.Request, res: express
     throw createError(error.details[0].message, 400);
   }
 
-  const project = await Project.findOne({
-    _id: req.params.projectId,
-    userId: req.user._id
-  });
+  const project = await Project.findById(req.params.projectId);
 
   if (!project) {
     throw createError('Proyecto no encontrado', 404);
   }
+
+  getProjectAccess(project, req.user._id.toString(), 'editor', getShareTokenFromRequest(req));
 
   if (!project.dashboard) {
     throw createError('El proyecto no tiene dashboard para actualizar', 404);
@@ -142,14 +141,13 @@ router.post('/:projectId/widgets', asyncHandler(async (req: express.Request, res
     throw createError(error.details[0].message, 400);
   }
 
-  const project = await Project.findOne({
-    _id: req.params.projectId,
-    userId: req.user._id
-  });
+  const project = await Project.findById(req.params.projectId);
 
   if (!project) {
     throw createError('Proyecto no encontrado', 404);
   }
+
+  getProjectAccess(project, req.user._id.toString(), 'editor', getShareTokenFromRequest(req));
 
   if (!project.dashboard) {
     throw createError('El proyecto no tiene dashboard', 404);
@@ -188,14 +186,13 @@ router.put('/:projectId/widgets/:widgetId', asyncHandler(async (req: express.Req
     throw createError(error.details[0].message, 400);
   }
 
-  const project = await Project.findOne({
-    _id: req.params.projectId,
-    userId: req.user._id
-  });
+  const project = await Project.findById(req.params.projectId);
 
   if (!project) {
     throw createError('Proyecto no encontrado', 404);
   }
+
+  getProjectAccess(project, req.user._id.toString(), 'editor', getShareTokenFromRequest(req));
 
   if (!project.dashboard) {
     throw createError('El proyecto no tiene dashboard', 404);
@@ -227,14 +224,13 @@ router.delete('/:projectId/widgets/:widgetId', asyncHandler(async (req: express.
     throw createError('Usuario no autenticado', 401);
   }
 
-  const project = await Project.findOne({
-    _id: req.params.projectId,
-    userId: req.user._id
-  });
+  const project = await Project.findById(req.params.projectId);
 
   if (!project) {
     throw createError('Proyecto no encontrado', 404);
   }
+
+  getProjectAccess(project, req.user._id.toString(), 'viewer', getShareTokenFromRequest(req));
 
   if (!project.dashboard) {
     throw createError('El proyecto no tiene dashboard', 404);
@@ -265,14 +261,13 @@ router.post('/:projectId/regenerate', asyncHandler(async (req: express.Request, 
     throw createError('Usuario no autenticado', 401);
   }
 
-  const project = await Project.findOne({
-    _id: req.params.projectId,
-    userId: req.user._id
-  });
+  const project = await Project.findById(req.params.projectId);
 
   if (!project) {
     throw createError('Proyecto no encontrado', 404);
   }
+
+  getProjectAccess(project, req.user._id.toString(), 'editor', getShareTokenFromRequest(req));
 
   if (!project.datasets || project.datasets.length === 0) {
     throw createError('El proyecto no tiene datasets para generar dashboard', 400);
@@ -345,14 +340,13 @@ router.get('/:projectId/data/:datasetId', asyncHandler(async (req: express.Reque
     throw createError('Usuario no autenticado', 401);
   }
 
-  const project = await Project.findOne({
-    _id: req.params.projectId,
-    userId: req.user._id
-  });
+  const project = await Project.findById(req.params.projectId);
 
   if (!project) {
     throw createError('Proyecto no encontrado', 404);
   }
+
+  getProjectAccess(project, req.user._id.toString(), 'viewer', getShareTokenFromRequest(req));
 
   const dataset = project.datasets.find(ds => ds._id.toString() === req.params.datasetId);
   if (!dataset) {

@@ -4,6 +4,7 @@ export interface User {
   _id: string;
   email: string;
   name: string;
+  role: UserRole;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -13,6 +14,9 @@ export interface Project {
   name: string;
   description: string;
   userId: string;
+  domain?: ProjectDomain;
+  sharing?: ProjectSharing;
+  alerts?: ProjectAlert[];
   datasets: Dataset[];
   dashboard?: Dashboard;
   documentation?: string;
@@ -92,7 +96,7 @@ export interface DashboardLayout {
 
 export interface AuthResponse {
   user: User;
-  token: string;
+  token?: string;
 }
 
 export interface ApiResponse<T = any> {
@@ -116,6 +120,7 @@ export interface RegisterRequest {
 export interface CreateProjectRequest {
   name: string;
   description: string;
+  domain?: ProjectDomain;
 }
 
 export interface AnalyzeDataRequest {
@@ -138,6 +143,34 @@ export interface VisualizationRecommendation {
   description: string;
   dataColumns: string[];
   reasoning: string;
+}
+
+export type ProjectDomain = 'sales' | 'marketing' | 'finance' | 'operations' | 'custom';
+
+export type ProjectSharePermission = 'viewer' | 'editor';
+
+export interface ProjectSharing {
+  enabled: boolean;
+  token: string;
+  permission: ProjectSharePermission;
+  updatedAt?: Date;
+}
+
+export type ProjectAlertSeverity = 'warning' | 'critical';
+
+export type ProjectAlertRuleId = 'reliability_warning' | 'reliability_critical';
+
+export interface ProjectAlert {
+  ruleId: ProjectAlertRuleId;
+  metric: 'reliabilityScore';
+  severity: ProjectAlertSeverity;
+  threshold: number;
+  currentValue: number;
+  message: string;
+  active: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  resolvedAt?: Date | null;
 }
 
 // Enums

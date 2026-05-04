@@ -1,18 +1,17 @@
 'use client';
 
 import { createContext, useContext, useEffect, useState } from 'react';
-import { User, AuthResponse } from '@/types';
+import { User } from '@/types';
 import { authApi } from '@/lib/api';
 import toast from 'react-hot-toast';
 
 interface AuthContextType {
   user: User | null;
-  token: string | null;
   isLoading: boolean;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   updateUser: (userData: Partial<User>) => void;
 }
 
@@ -20,38 +19,22 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const isAuthenticated = !!user && !!token;
+  const isAuthenticated = !!user;
 
-  // Initialize auth state from localStorage
+  // Initialize auth state from secure httpOnly cookie session
   useEffect(() => {
     const initAuth = async () => {
       try {
-        const storedToken = localStorage.getItem('auth_token');
-        const storedUser = localStorage.getItem('auth_user');
-
-        if (storedToken && storedUser) {
-          setToken(storedToken);
-          setUser(JSON.parse(storedUser));
-          
-          // Verify token is still valid
-          try {
-            const response = await authApi.getProfile();
-            if (response.data.success) {
-              setUser(response.data.data);
-            } else {
-              // Token is invalid, clear auth
-              clearAuth();
-            }
-          } catch (error) {
-            // Token is invalid, clear auth
-            clearAuth();
-          }
+        const response = await authApi.getProfile();
+        if (response.data.success && response.data.data) {
+          setUser(response.data.data);
+        } else {
+          clearAuth();
         }
       } catch (error) {
-        console.error('Error initializing auth:', error);
+        // Session missing/expired is expected; keep user as unauthenticated.
         clearAuth();
       } finally {
         setIsLoading(false);
@@ -63,16 +46,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const clearAuth = () => {
     setUser(null);
-    setToken(null);
-    localStorage.removeItem('auth_token');
-    localStorage.removeItem('auth_user');
-  };
-
-  const setAuth = (authData: AuthResponse) => {
-    setUser(authData.user);
-    setToken(authData.token);
-    localStorage.setItem('auth_token', authData.token);
-    localStorage.setItem('auth_user', JSON.stringify(authData.user));
   };
 
   const login = async (email: string, password: string) => {
@@ -80,7 +53,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const response = await authApi.login({ email, password });
       
       if (response.data.success && response.data.data) {
-        setAuth(response.data.data);
+        setUser(response.data.data.user);
         toast.success('¡Bienvenido de vuelta!');
       } else {
         throw new Error(response.data.message || 'Error al iniciar sesión');
@@ -97,7 +70,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const response = await authApi.register({ name, email, password });
       
       if (response.data.success && response.data.data) {
-        setAuth(response.data.data);
+        setUser(response.data.data.user);
         toast.success('¡Cuenta creada exitosamente!');
       } else {
         throw new Error(response.data.message || 'Error al registrarse');
@@ -109,22 +82,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const logout = () => {
-    clearAuth();
-    toast.success('Sesión cerrada correctamente');
+  const logout = async () => {
+    try {
+      await authApi.logout();
+    } catch (error) {
+      // If backend is unavailable, still clear local auth state.
+    } finally {
+      clearAuth();
+      toast.success('Sesión cerrada correctamente');
+    }
   };
 
   const updateUser = (userData: Partial<User>) => {
     if (user) {
       const updatedUser = { ...user, ...userData };
       setUser(updatedUser);
-      localStorage.setItem('auth_user', JSON.stringify(updatedUser));
     }
   };
 
   const value: AuthContextType = {
     user,
-    token,
     isLoading,
     isAuthenticated,
     login,

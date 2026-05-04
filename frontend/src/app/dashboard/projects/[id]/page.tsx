@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'react-hot-toast';
 import {
@@ -25,8 +25,11 @@ import {
   TableCellsIcon as TableIcon,
   CodeBracketIcon,
   ChatBubbleLeftRightIcon,
+  LinkIcon,
+  ClipboardDocumentIcon,
+  ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
-import { projectsApi, uploadApi } from '@/lib/api';
+import { projectsApi, uploadApi, jobsApi } from '@/lib/api';
 import { Project, Dataset } from '@/types';
 
 /** Convierte markdown básico (**negrita**, saltos de línea) en JSX */
@@ -145,8 +148,10 @@ import {
 export default function ProjectDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const projectId = params.id as string;
+  const shareToken = searchParams.get('share') || undefined;
   
   const [activeTab, setActiveTab] = useState('overview');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -169,6 +174,12 @@ export default function ProjectDetailPage() {
   // Custom widget generation modal
   const [showCustomWidgetModal, setShowCustomWidgetModal] = useState(false);
   const [customWidgetPrompt, setCustomWidgetPrompt] = useState('');
+  const [shareEnabled, setShareEnabled] = useState(false);
+  const [sharePermission, setSharePermission] = useState<'viewer' | 'editor'>('viewer');
+  const [shareLink, setShareLink] = useState('');
+  const generationToastRef = useRef<string | null>(null);
+  const previousStatusRef = useRef<string | undefined>(undefined);
+  const analysisPollRef = useRef<number | null>(null);
 
   const closeModal = useCallback(() => {
     setActiveWidget(null);
@@ -273,18 +284,78 @@ export default function ProjectDetailPage() {
 
   // Get project data
   const { data: projectData, isLoading, error } = useQuery({
-    queryKey: ['project', projectId],
-    queryFn: () => projectsApi.getProject(projectId),
+    queryKey: ['project', projectId, shareToken || 'owner'],
+    queryFn: () => projectsApi.getProject(projectId, shareToken),
     enabled: !!projectId,
   });
 
   const project: Project | undefined = projectData?.data?.data;
+  const accessMode = project?.access || 'owner';
+  const canEdit = accessMode === 'owner' || accessMode === 'editor';
+  const canShare = accessMode === 'owner';
+
+  useEffect(() => {
+    if (project?.status !== 'analyzing') {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectId, shareToken || 'owner'] });
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [project?.status, projectId, queryClient]);
+
+  useEffect(() => {
+    setIsAnalyzing(project?.status === 'analyzing');
+  }, [project?.status]);
+
+  useEffect(() => {
+    if (project?.sharing) {
+      setShareEnabled(!!project.sharing.enabled);
+      setSharePermission(project.sharing.permission || 'viewer');
+      if (project.shareLink) {
+        setShareLink(project.shareLink);
+      }
+    }
+  }, [project?.sharing, project?.shareLink]);
+
+  useEffect(() => {
+    const previousStatus = previousStatusRef.current;
+    const currentStatus = project?.status;
+
+    if (previousStatus === 'analyzing' && currentStatus && currentStatus !== 'analyzing') {
+      if (generationToastRef.current) {
+        toast.dismiss(generationToastRef.current);
+        generationToastRef.current = null;
+      }
+
+      if (currentStatus === 'ready') {
+        toast.success(
+          project?.hasDocumentation
+            ? 'Dashboard y documentación generados correctamente'
+            : 'Dashboard generado correctamente'
+        );
+      } else if (currentStatus === 'error') {
+        toast.error('No se pudo generar el dashboard y la documentación');
+      }
+    }
+
+    previousStatusRef.current = currentStatus;
+  }, [project?.status, project?.hasDocumentation]);
 
   // Get dashboard data
   const { data: dashboardData } = useQuery({
-    queryKey: ['dashboard', projectId],
-    queryFn: () => projectsApi.getDashboard(projectId),
+    queryKey: ['dashboard', projectId, shareToken || 'owner'],
+    queryFn: () => projectsApi.getDashboard(projectId, shareToken),
     enabled: !!projectId && !!project?.dashboard,
+  });
+
+  // Reliability data
+  const reliabilityQuery = useQuery({
+    queryKey: ['project', projectId, shareToken || 'owner', 'reliability'],
+    queryFn: () => projectsApi.getReliability(projectId, shareToken),
+    enabled: !!projectId && activeTab === 'reliability',
   });
 
   // Delete project mutation
@@ -305,7 +376,7 @@ export default function ProjectDetailPage() {
     mutationFn: (datasetId: string) => uploadApi.deleteDataset(projectId, datasetId),
     onSuccess: () => {
       toast.success('Dataset eliminado');
-      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['project', projectId, shareToken || 'owner'] });
     },
     onError: () => {
       toast.error('Error al eliminar el dataset');
@@ -314,14 +385,50 @@ export default function ProjectDetailPage() {
 
   // Analyze project mutation
   const analyzeMutation = useMutation({
-    mutationFn: () => projectsApi.analyzeProject(projectId),
-    onSuccess: () => {
-      setIsAnalyzing(false);
-      toast.success('¡Análisis completado! Dashboard y documentación generados.');
-      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+    mutationFn: () => projectsApi.analyzeProject(projectId, shareToken),
+    onSuccess: (res: any) => {
+      const jobId = res?.data?.data?.jobId;
+      queryClient.invalidateQueries({ queryKey: ['project', projectId, shareToken || 'owner'] });
+
+      if (jobId) {
+        // Poll job status and update toast
+        const poll = async () => {
+          try {
+            const r = await jobsApi.getJob(jobId);
+            const job = r.data.data;
+            const prog = job?.progress ?? 0;
+            const msg = job?.message || '';
+            if (generationToastRef.current) {
+              toast.loading(`${prog}% — ${msg || 'Procesando...'}`, { id: generationToastRef.current });
+            }
+
+            if (job.status === 'completed') {
+              if (generationToastRef.current) toast.success('Análisis finalizado', { id: generationToastRef.current });
+              if (analysisPollRef.current) { clearInterval(analysisPollRef.current); analysisPollRef.current = null; }
+              generationToastRef.current = null;
+              queryClient.invalidateQueries({ queryKey: ['project', projectId, shareToken || 'owner'] });
+            } else if (job.status === 'failed') {
+              if (generationToastRef.current) toast.error(`Fallo: ${job.message || 'Error'}`, { id: generationToastRef.current });
+              if (analysisPollRef.current) { clearInterval(analysisPollRef.current); analysisPollRef.current = null; }
+              generationToastRef.current = null;
+              queryClient.invalidateQueries({ queryKey: ['project', projectId, shareToken || 'owner'] });
+            }
+          } catch (e) {
+            // network error — keep polling
+          }
+        };
+
+        // run immediately then poll
+        void poll();
+        analysisPollRef.current = window.setInterval(poll, 2000) as unknown as number;
+      }
     },
     onError: (error: any) => {
       setIsAnalyzing(false);
+      if (generationToastRef.current) {
+        toast.dismiss(generationToastRef.current);
+        generationToastRef.current = null;
+      }
       const msg = error?.response?.data?.message || 'Error al analizar el proyecto';
       toast.error(msg);
     },
@@ -334,18 +441,23 @@ export default function ProjectDetailPage() {
   };
 
   const handleAnalyzeProject = () => {
+    if (analyzeMutation.isPending || isAnalyzing || !canEdit) {
+      return;
+    }
+
+    generationToastRef.current = toast.loading('Generando dashboard y documentación...');
     setIsAnalyzing(true);
     analyzeMutation.mutate();
   };
 
   // Generate custom widget mutation
   const generateWidgetMutation = useMutation({
-    mutationFn: (prompt: string) => projectsApi.generateCustomWidget(projectId, prompt),
+    mutationFn: (prompt: string) => projectsApi.generateCustomWidget(projectId, prompt, shareToken),
     onSuccess: () => {
       toast.success('¡Widget generado y guardado en el dashboard!');
       setShowCustomWidgetModal(false);
       setCustomWidgetPrompt('');
-      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['project', projectId, shareToken || 'owner'] });
     },
     onError: (error: any) => {
       const msg = error?.response?.data?.message || 'Error al generar el widget';
@@ -408,10 +520,11 @@ export default function ProjectDetailPage() {
     { id: 'datasets', name: 'Datasets', icon: TableCellsIcon },
     { id: 'dashboard', name: 'Dashboard', icon: ChartBarIcon },
     { id: 'documentation', name: 'Documentación', icon: DocumentTextIcon },
+    { id: 'reliability', name: 'Confiabilidad técnica', icon: CodeBracketIcon },
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-background">
       {/* Modal de carga durante el análisis */}
       <AnimatePresence>
         {isAnalyzing && (
@@ -425,24 +538,24 @@ export default function ProjectDetailPage() {
               initial={{ scale: 0.85, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.85, opacity: 0 }}
-              className="bg-white rounded-2xl shadow-2xl p-10 flex flex-col items-center gap-6 max-w-sm w-full mx-4"
+              className="w-full max-w-sm mx-4 rounded-2xl border border-border bg-card p-10 shadow-2xl flex flex-col items-center gap-6"
             >
               {/* Spinner */}
               <div className="relative w-20 h-20">
-                <svg className="animate-spin w-20 h-20 text-green-500" viewBox="0 0 50 50">
+                <svg className="w-20 h-20 animate-spin text-primary" viewBox="0 0 50 50">
                   <circle className="opacity-20" cx="25" cy="25" r="20" stroke="currentColor" strokeWidth="5" fill="none" />
                   <circle cx="25" cy="25" r="20" stroke="currentColor" strokeWidth="5" fill="none"
                     strokeDasharray="80" strokeDashoffset="60" strokeLinecap="round" />
                 </svg>
-                <SparklesIcon className="absolute inset-0 m-auto w-8 h-8 text-green-600" />
+                <SparklesIcon className="absolute inset-0 m-auto w-8 h-8 text-primary" />
               </div>
               <div className="text-center">
-                <h3 className="text-xl font-bold text-gray-900 mb-2">Analizando con IA</h3>
-                <p className="text-gray-500 text-sm">Gemini está procesando tu dataset, generando el dashboard y la documentación. Esto puede tardar unos segundos…</p>
+                <h3 className="mb-2 text-xl font-bold text-foreground">Analizando con IA</h3>
+                <p className="text-sm text-muted-foreground">Gemini está procesando tu dataset, generando el dashboard y la documentación. Esto puede tardar unos segundos…</p>
               </div>
               <div className="flex gap-1">
                 {[0, 1, 2].map(i => (
-                  <motion.div key={i} className="w-2 h-2 rounded-full bg-green-500"
+                  <motion.div key={i} className="w-2 h-2 rounded-full bg-primary"
                     animate={{ y: [0, -8, 0] }}
                     transition={{ duration: 0.7, repeat: Infinity, delay: i * 0.15 }} />
                 ))}
@@ -459,60 +572,66 @@ export default function ProjectDetailPage() {
             <div className="flex items-start space-x-4 min-w-0">
               <button
                 onClick={() => router.push('/dashboard/projects')}
-                className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 flex-shrink-0 mt-0.5"
+                className="mt-0.5 flex-shrink-0 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-muted-foreground shadow-sm transition-colors hover:bg-accent"
               >
-                <ArrowLeftIcon className="h-4 w-4 mr-2" />
+                <ArrowLeftIcon className="h-4 w-4" />
                 Volver
               </button>
 
               <div className="min-w-0">
-                <h1 className="text-2xl font-bold text-gray-900 truncate">{project.name}</h1>
+                <h1 className="truncate text-2xl font-bold text-foreground">{project.name}</h1>
                 {(() => {
                   const desc = project.description || '';
                   // Si la descripción parece una lista de columnas (muchas comas, sin espacios largos), no mostrarla
                   const isColumnList = (desc.match(/,/g) || []).length > 5 && desc.split(' ').length < desc.split(',').length * 1.5;
                   if (!desc || isColumnList) return null;
-                  return <p className="text-gray-500 mt-1 text-sm line-clamp-2 max-w-2xl">{desc}</p>;
+                  return <p className="mt-1 line-clamp-2 max-w-2xl text-sm text-muted-foreground">{desc}</p>;
                 })()}
               </div>
             </div>
 
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+            <div className="flex flex-shrink-0 items-center gap-2">
+              <span className="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
                 {project.datasets?.length || 0} datasets
               </span>
               
-              <button
-                onClick={handleAnalyzeProject}
-                disabled={isAnalyzing || analyzeMutation.isPending}
-                className="inline-flex items-center px-3 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
-              >
-                <PlayIcon className="h-4 w-4 mr-1.5" />
-                {isAnalyzing ? 'Analizando…' : 'Analizar con IA'}
-              </button>
+              {canEdit && (
+                <button
+                  onClick={handleAnalyzeProject}
+                  disabled={isAnalyzing || analyzeMutation.isPending}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-transparent bg-green-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-green-700 disabled:opacity-50"
+                >
+                  <PlayIcon className="h-4 w-4" />
+                  {isAnalyzing ? 'Analizando…' : 'Analizar con IA'}
+                </button>
+              )}
 
-              <button
-                onClick={() => router.push(`/dashboard/projects/${projectId}/edit`)}
-                className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-              >
-                <PencilIcon className="h-4 w-4 mr-1.5" />
-                Editar
-              </button>
+              {canShare && (
+                <button
+                  onClick={() => router.push(`/dashboard/projects/${projectId}/edit`)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-muted-foreground shadow-sm transition-colors hover:bg-accent"
+                >
+                  <PencilIcon className="h-4 w-4" />
+                  Editar
+                </button>
+              )}
 
-              <button
-                onClick={handleDeleteProject}
-                disabled={deleteMutation.isPending}
-                className="inline-flex items-center px-3 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
-              >
-                <TrashIcon className="h-4 w-4 mr-1.5" />
-                Eliminar
-              </button>
+              {canShare && (
+                <button
+                  onClick={handleDeleteProject}
+                  disabled={deleteMutation.isPending}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-transparent bg-red-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-red-700 disabled:opacity-50"
+                >
+                  <TrashIcon className="h-4 w-4" />
+                  Eliminar
+                </button>
+              )}
             </div>
           </div>
         </div>
 
         {/* Tabs */}
-        <div className="border-b border-gray-200 mb-6">
+        <div className="mb-6 border-b border-border">
           <nav className="-mb-px flex space-x-8">
             {tabs.map((tab) => {
               const Icon = tab.icon;
@@ -520,11 +639,11 @@ export default function ProjectDetailPage() {
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`py-2 px-1 border-b-2 font-medium text-sm flex items-center ${
+                  className={`flex items-center border-b-2 px-1 py-2 text-sm font-medium ${
                     activeTab === tab.id
-                      ? 'border-blue-500 text-blue-600'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                  }`}
+                      ? 'border-primary text-primary'
+                      : 'border-transparent text-muted-foreground hover:border-border hover:text-foreground'
+                  }`}  
                 >
                   <Icon className="h-5 w-5 mr-2" />
                   {tab.name}
@@ -542,25 +661,25 @@ export default function ProjectDetailPage() {
           transition={{ duration: 0.3 }}
         >
           {activeTab === 'overview' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
               {/* Project Info */}
               <div className="lg:col-span-2">
-                <div className="bg-white shadow rounded-lg p-6 mb-6">
-                  <h3 className="text-lg font-medium text-gray-900 mb-4">Información del Proyecto</h3>
+                <div className="mb-6 rounded-2xl border border-border bg-card/95 p-6 shadow-sm">
+                  <h3 className="mb-4 text-lg font-semibold text-foreground">Información del Proyecto</h3>
                   <dl className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
                     <div>
-                      <dt className="text-sm font-medium text-gray-500 flex items-center">
-                        <UserIcon className="h-4 w-4 mr-1" />
+                      <dt className="flex items-center text-sm font-medium text-muted-foreground">
+                        <UserIcon className="mr-1 h-4 w-4" />
                         Creador
                       </dt>
-                      <dd className="mt-1 text-sm text-gray-900">Usuario actual</dd>
+                      <dd className="mt-1 text-sm text-foreground">Usuario actual</dd>
                     </div>
                     <div>
-                      <dt className="text-sm font-medium text-gray-500 flex items-center">
-                        <CalendarDaysIcon className="h-4 w-4 mr-1" />
+                      <dt className="flex items-center text-sm font-medium text-muted-foreground">
+                        <CalendarDaysIcon className="mr-1 h-4 w-4" />
                         Fecha de creación
                       </dt>
-                      <dd className="mt-1 text-sm text-gray-900">
+                      <dd className="mt-1 text-sm text-foreground">
                         {new Date(project.createdAt).toLocaleDateString('es-ES', {
                           year: 'numeric',
                           month: 'long',
@@ -569,43 +688,100 @@ export default function ProjectDetailPage() {
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-sm font-medium text-gray-500 flex items-center">
-                        <TableCellsIcon className="h-4 w-4 mr-1" />
+                      <dt className="flex items-center text-sm font-medium text-muted-foreground">
+                        <TableCellsIcon className="mr-1 h-4 w-4" />
                         Datasets
                       </dt>
-                      <dd className="mt-1 text-sm text-gray-900">{project.datasets?.length || 0} archivos</dd>
+                      <dd className="mt-1 text-sm text-foreground">{project.datasets?.length || 0} archivos</dd>
                     </div>
                     <div>
-                      <dt className="text-sm font-medium text-gray-500 flex items-center">
-                        <ChartBarIcon className="h-4 w-4 mr-1" />
+                      <dt className="flex items-center text-sm font-medium text-muted-foreground">
+                        <ChartBarIcon className="mr-1 h-4 w-4" />
                         Dashboard
                       </dt>
-                      <dd className="mt-1 text-sm text-gray-900">
+                      <dd className="mt-1 text-sm text-foreground">
                         {project.dashboard ? 'Generado' : 'No generado'}
                       </dd>
                     </div>
                   </dl>
                 </div>
 
+                {canShare && (
+                  <div className="mb-6 rounded-2xl border border-border bg-card/95 p-6 shadow-sm">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <h3 className="text-lg font-semibold text-foreground">Compartir dashboard</h3>
+                      <span className="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                        Solo usuarios registrados
+                      </span>
+                    </div>
+                    <p className="mb-4 text-sm text-muted-foreground">
+                      Crea un enlace para otros usuarios autenticados. Viewer solo consulta; editor puede regenerar y modificar el dashboard.
+                    </p>
+                    <div className="mb-4 flex flex-wrap items-center gap-4">
+                      <label className="inline-flex items-center gap-2 text-sm text-foreground">
+                        <input type="checkbox" checked={shareEnabled} onChange={(e) => setShareEnabled(e.target.checked)} />
+                        Habilitar enlace
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <button type="button" onClick={() => setSharePermission('viewer')} className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${sharePermission === 'viewer' ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-foreground hover:bg-accent'}`}>
+                          Viewer
+                        </button>
+                        <button type="button" onClick={() => setSharePermission('editor')} className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${sharePermission === 'editor' ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-foreground hover:bg-accent'}`}>
+                          Editor
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const res = await projectsApi.updateProjectShare(projectId, { enabled: shareEnabled, permission: sharePermission, regenerateToken: !shareLink });
+                          const data = res.data.data;
+                          if (data?.shareLink) {
+                            setShareLink(data.shareLink);
+                            await navigator.clipboard.writeText(data.shareLink);
+                            toast.success('Enlace compartido copiado');
+                          }
+                        }}
+                        className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                      >
+                        <LinkIcon className="h-4 w-4" />
+                        Guardar y copiar enlace
+                      </button>
+                      {shareLink && (
+                        <button
+                          type="button"
+                          onClick={() => navigator.clipboard.writeText(shareLink)}
+                          className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent"
+                        >
+                          <ClipboardDocumentIcon className="h-4 w-4" />
+                          Copiar enlace
+                        </button>
+                      )}
+                    </div>
+                    {shareLink && <div className="mt-3 break-all rounded-lg border border-border bg-muted/30 p-3 text-sm text-foreground">{shareLink}</div>}
+                  </div>
+                )}
+
                 {/* Recent Activity */}
-                <div className="bg-white shadow rounded-lg p-6">
-                  <h3 className="text-lg font-medium text-gray-900 mb-4">Actividad Reciente</h3>
+                <div className="rounded-2xl border border-border bg-card/95 p-6 shadow-sm">
+                  <h3 className="mb-4 text-lg font-semibold text-foreground">Actividad Reciente</h3>
                   <div className="flow-root">
                     <ul className="-mb-8">
                       <li className="relative pb-8">
                         <div className="relative flex space-x-3">
                           <div className="flex-shrink-0">
-                            <span className="h-8 w-8 rounded-full bg-blue-500 flex items-center justify-center">
-                              <DocumentDuplicateIcon className="h-4 w-4 text-white" />
+                            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary">
+                              <DocumentDuplicateIcon className="h-4 w-4 text-primary-foreground" />
                             </span>
                           </div>
-                          <div className="min-w-0 flex-1 pt-1.5 flex justify-between space-x-4">
+                          <div className="min-w-0 flex-1 flex justify-between space-x-4 pt-1.5">
                             <div>
-                              <p className="text-sm text-gray-500">
-                                Proyecto <span className="font-medium text-gray-900">creado</span>
+                              <p className="text-sm text-muted-foreground">
+                                Proyecto <span className="font-medium text-foreground">creado</span>
                               </p>
                             </div>
-                            <div className="text-right text-sm whitespace-nowrap text-gray-500">
+                            <div className="whitespace-nowrap text-right text-sm text-muted-foreground">
                               {new Date(project.createdAt).toLocaleDateString('es-ES')}
                             </div>
                           </div>
@@ -618,24 +794,24 @@ export default function ProjectDetailPage() {
 
               {/* Stats */}
               <div className="space-y-6">
-                <div className="bg-white shadow rounded-lg p-6">
-                  <h3 className="text-lg font-medium text-gray-900 mb-4">Estadísticas</h3>
+                <div className="rounded-2xl border border-border bg-card/95 p-6 shadow-sm">
+                  <h3 className="mb-4 text-lg font-semibold text-foreground">Estadísticas</h3>
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-gray-500">Total de registros</span>
-                      <span className="text-lg font-bold text-gray-900">
+                      <span className="text-sm font-medium text-muted-foreground">Total de registros</span>
+                      <span className="text-lg font-bold text-foreground">
                         {project.datasets?.reduce((acc, dataset) => acc + (dataset.metadata?.rowCount || 0), 0) || 0}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-gray-500">Tamaño total</span>
-                      <span className="text-lg font-bold text-gray-900">
+                      <span className="text-sm font-medium text-muted-foreground">Tamaño total</span>
+                      <span className="text-lg font-bold text-foreground">
                         {formatFileSize(project.datasets?.reduce((acc, dataset) => acc + dataset.size, 0) || 0)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-gray-500">Última actualización</span>
-                      <span className="text-sm text-gray-900">
+                      <span className="text-sm font-medium text-muted-foreground">Última actualización</span>
+                      <span className="text-sm text-foreground">
                         {new Date(project.updatedAt).toLocaleDateString('es-ES')}
                       </span>
                     </div>
@@ -646,51 +822,55 @@ export default function ProjectDetailPage() {
           )}
 
           {activeTab === 'datasets' && (
-            <div className="bg-white shadow rounded-lg">
-              <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-                <h3 className="text-lg font-medium text-gray-900">Datasets del Proyecto</h3>
-                <button
-                  onClick={() => router.push(`/dashboard/projects/${projectId}/edit`)}
-                  className="inline-flex items-center px-3 py-1.5 border border-blue-300 text-xs font-medium rounded-md text-blue-700 bg-blue-50 hover:bg-blue-100"
-                >
-                  <TableCellsIcon className="h-3.5 w-3.5 mr-1" />
-                  Agregar Dataset
-                </button>
+            <div className="overflow-hidden rounded-2xl border border-border bg-card/95 shadow-sm">
+              <div className="flex items-center justify-between border-b border-border bg-muted/40 px-6 py-4">
+                <h3 className="text-lg font-semibold text-foreground">Datasets del Proyecto</h3>
+                {canEdit && (
+                  <button
+                    onClick={() => router.push(`/dashboard/projects/${projectId}/edit`)}
+                    className="inline-flex items-center gap-1 rounded-lg border border-primary/20 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
+                  >
+                    <TableCellsIcon className="h-3.5 w-3.5" />
+                    Agregar Dataset
+                  </button>
+                )}
               </div>
               <div className="p-6">
                 {project.datasets && project.datasets.length > 0 ? (
                   <div className="space-y-4">
                     {project.datasets.map((dataset: Dataset) => (
-                      <div key={dataset._id} className="border border-gray-200 rounded-lg p-4 hover:border-gray-300 transition-colors">
-                        <div className="flex items-start justify-between mb-3">
+                      <div key={dataset._id} className="rounded-lg border border-border bg-background/70 p-4 transition-colors hover:border-border/80">
+                        <div className="mb-3 flex items-start justify-between">
                           <div className="flex items-start gap-3">
-                            <div className="mt-0.5 w-9 h-9 bg-blue-50 rounded-lg flex items-center justify-center flex-shrink-0">
-                              <TableCellsIcon className="h-5 w-5 text-blue-500" />
+                            <div className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                              <TableCellsIcon className="h-5 w-5 text-primary" />
                             </div>
                             <div>
-                              <h4 className="text-sm font-semibold text-gray-900">{dataset.originalName}</h4>
-                              <p className="text-xs text-gray-500 mt-0.5">
+                              <h4 className="text-sm font-semibold text-foreground">{dataset.originalName}</h4>
+                              <p className="mt-0.5 text-xs text-muted-foreground">
                                 {formatFileSize(dataset.size)} &bull; {(dataset.metadata?.rowCount || 0).toLocaleString()} registros &bull; {dataset.metadata?.columns?.length || 0} columnas
                               </p>
-                              <p className="text-xs text-gray-400 mt-0.5">Subido el {new Date(dataset.uploadedAt).toLocaleDateString('es-ES', { year: 'numeric', month: 'short', day: 'numeric' })}</p>
+                              <p className="mt-0.5 text-xs text-muted-foreground/70">Subido el {new Date(dataset.uploadedAt).toLocaleDateString('es-ES', { year: 'numeric', month: 'short', day: 'numeric' })}</p>
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">
+                            <span className="inline-flex items-center rounded bg-muted/40 px-2 py-0.5 text-xs font-medium text-muted-foreground">
                               {dataset.mimetype.split('/').pop()?.toUpperCase() || 'CSV'}
                             </span>
-                            <button
-                              onClick={() => {
-                                if (confirm(`¿Eliminar "${dataset.originalName}"? Esta acción no se puede deshacer.`)) {
-                                  deleteDatasetMutation.mutate(dataset._id);
-                                }
-                              }}
-                              disabled={deleteDatasetMutation.isPending}
-                              className="p-1.5 rounded-md text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-                              title="Eliminar dataset"
-                            >
-                              <TrashIcon className="h-4 w-4" />
-                            </button>
+                            {canEdit && (
+                              <button
+                                onClick={() => {
+                                  if (confirm(`¿Eliminar "${dataset.originalName}"? Esta acción no se puede deshacer.`)) {
+                                    deleteDatasetMutation.mutate(dataset._id);
+                                  }
+                                }}
+                                disabled={deleteDatasetMutation.isPending}
+                                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-red-500/20 hover:text-red-400 disabled:opacity-50"
+                                title="Eliminar dataset"
+                              >
+                                <TrashIcon className="h-4 w-4" />
+                              </button>
+                            )}
                           </div>
                         </div>
                         {dataset.metadata?.columns && dataset.metadata.columns.length > 0 && (
@@ -700,17 +880,19 @@ export default function ProjectDetailPage() {
                     ))}
                   </div>
                 ) : (
-                  <div className="text-center py-12">
-                    <TableCellsIcon className="mx-auto h-12 w-12 text-gray-300" />
-                    <h3 className="mt-2 text-sm font-medium text-gray-900">Sin datasets</h3>
-                    <p className="mt-1 text-sm text-gray-500 mb-4">Este proyecto no tiene datasets cargados aún.</p>
-                    <button
-                      onClick={() => router.push(`/dashboard/projects/${projectId}/edit`)}
-                      className="inline-flex items-center px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
-                    >
-                      <TableCellsIcon className="h-4 w-4 mr-2" />
-                      Subir Dataset
-                    </button>
+                  <div className="py-12 text-center">
+                    <TableCellsIcon className="mx-auto h-12 w-12 text-muted-foreground/50" />
+                    <h3 className="mt-2 text-sm font-medium text-foreground">Sin datasets</h3>
+                    <p className="mb-4 mt-1 text-sm text-muted-foreground">Este proyecto no tiene datasets cargados aún.</p>
+                    {canEdit && (
+                      <button
+                        onClick={() => router.push(`/dashboard/projects/${projectId}/edit`)}
+                        className="inline-flex items-center gap-2 rounded-lg border border-transparent bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                      >
+                        <TableCellsIcon className="h-4 w-4" />
+                        Subir Dataset
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -718,19 +900,19 @@ export default function ProjectDetailPage() {
           )}
 
           {activeTab === 'dashboard' && (
-            <div className="bg-white shadow rounded-lg overflow-hidden">
-              <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-                <h3 className="text-lg font-medium text-gray-900">
+            <div className="overflow-hidden rounded-2xl border border-border bg-card/95 shadow-sm">
+              <div className="flex items-center justify-between border-b border-border bg-muted/40 px-6 py-4">
+                <h3 className="text-lg font-semibold text-foreground">
                   {project.dashboard?.title || 'Dashboard del Proyecto'}
                 </h3>
-                {project.dashboard && (
+                {project.dashboard && canEdit && (
                   <div className="flex items-center gap-3">
-                    <span className="text-sm text-gray-500">
+                    <span className="text-sm text-muted-foreground">
                       {project.dashboard.widgets?.length || 0} gráficos generados
                     </span>
                     <button
                       onClick={() => setShowCustomWidgetModal(true)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-sm font-medium shadow-sm hover:from-violet-700 hover:to-indigo-700 active:scale-95 transition-all"
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-violet-600 to-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition-all active:scale-95 hover:from-violet-700 hover:to-indigo-700"
                       title="Generar gráfico personalizado con IA"
                     >
                       <SparklesIcon className="h-4 w-4" />
@@ -741,7 +923,7 @@ export default function ProjectDetailPage() {
               </div>
               <div className="p-6">
                 {project.dashboard && project.dashboard.widgets && project.dashboard.widgets.length > 0 ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
                     {project.dashboard.widgets.map((widget: any) => {
                       // Obtener datos del primer dataset del proyecto
                       const rawData: any[] = project.datasets?.[0]?.data || [];
@@ -769,22 +951,26 @@ export default function ProjectDetailPage() {
                         <div
                           key={widget.id}
                           className="bg-white rounded-xl p-5 border border-gray-200 shadow-sm cursor-pointer group relative hover:border-blue-300 hover:shadow-md transition-all duration-150"
-                          onDoubleClick={() => handleOpenWidget(widget, rawData)}
+                          onDoubleClick={() => {
+                            if (canEdit) {
+                              handleOpenWidget(widget, rawData);
+                            }
+                          }}
                           title="Doble clic para analizar con IA"
                         >
                           {/* Double click hint badge */}
-                          <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 border border-blue-100 text-blue-500 text-[10px] font-medium">
+                          <div className="pointer-events-none absolute top-3 right-3 opacity-0 transition-opacity group-hover:opacity-100">
+                            <span className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
                               <SparklesIcon className="h-3 w-3" />
                               Doble clic
                             </span>
                           </div>
                           {/* Card header */}
-                          <h4 className="font-semibold text-gray-900 text-sm mb-0.5">{widget.title}</h4>
-                          <p className="text-xs text-gray-500 mb-4 leading-snug">{widget.description}</p>
+                          <h4 className="mb-0.5 text-sm font-semibold text-foreground">{widget.title}</h4>
+                          <p className="mb-4 leading-snug text-xs text-muted-foreground">{widget.description}</p>
 
                           {chartData.length === 0 ? (
-                            <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
+                            <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
                               Sin datos para mostrar
                             </div>
                           ) : (
@@ -917,13 +1103,15 @@ export default function ProjectDetailPage() {
                     <p className="mt-1 text-sm text-gray-500">
                       Ejecuta un análisis para generar el dashboard.
                     </p>
-                    <button
-                      onClick={handleAnalyzeProject}
-                      className="mt-4 inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700"
-                    >
-                      <PlayIcon className="h-4 w-4 mr-2" />
-                      Generar Dashboard
-                    </button>
+                    {canEdit && (
+                      <button
+                        onClick={handleAnalyzeProject}
+                        className="mt-4 inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700"
+                      >
+                        <PlayIcon className="h-4 w-4 mr-2" />
+                        Generar Dashboard
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -931,48 +1119,148 @@ export default function ProjectDetailPage() {
           )}
 
           {activeTab === 'documentation' && (
-            <div className="bg-white shadow rounded-lg">
-              <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-                <h3 className="text-lg font-medium text-gray-900">Documentación del Proyecto</h3>
+            <div className="overflow-hidden rounded-2xl border border-border bg-card/95 shadow-sm">
+              <div className="flex items-center justify-between border-b border-border bg-muted/40 px-6 py-4">
+                <h3 className="text-lg font-semibold text-foreground">Documentación del Proyecto</h3>
               </div>
-              <div className="p-0">
+              <div className="max-h-[calc(100vh-280px)] overflow-y-auto bg-background/60">
                 {project.documentation ? (
                   project.documentation.startsWith('<!DOCTYPE html>') || project.documentation.startsWith('<html') ? (
                     <iframe
-                      srcDoc={project.documentation.replace('</body>', `<script>
-(function(){
-  document.querySelectorAll('a[href^="#"]').forEach(function(a){
-    a.addEventListener('click',function(e){
-      e.preventDefault();
-      var id = this.getAttribute('href').slice(1);
-      var el = document.getElementById(id);
-      if(el) el.scrollIntoView({behavior:'smooth'});
-    });
-  });
-})();
-<\/script></body>`)}
-                      className="w-full border-0 rounded-b-lg"
-                      style={{ minHeight: '82vh' }}
+                      srcDoc={sanitizeHtmlForIframe(project.documentation)}
+                      className="block w-full border-0 rounded-b-2xl"
+                      style={{ minHeight: '78vh', backgroundColor: 'transparent' }}
                       title="Documentación del Proyecto"
-                      sandbox="allow-same-origin allow-scripts"
+                      sandbox=""
+                      referrerPolicy="no-referrer"
                     />
                   ) : (
-                    <div className="p-6 prose max-w-none">
-                      <pre className="whitespace-pre-wrap text-sm text-gray-700">
+                    <div className="p-6 prose max-w-none prose-invert dark:prose-invert">
+                      <pre className="whitespace-pre-wrap text-sm text-foreground">
                         {project.documentation}
                       </pre>
                     </div>
                   )
                 ) : (
-                  <div className="text-center py-12">
-                    <DocumentTextIcon className="mx-auto h-12 w-12 text-gray-400" />
-                    <h3 className="mt-2 text-sm font-medium text-gray-900">Sin documentación</h3>
-                    <p className="mt-1 text-sm text-gray-500">
+                  <div className="py-12 text-center">
+                    <DocumentTextIcon className="mx-auto h-12 w-12 text-muted-foreground" />
+                    <h3 className="mt-2 text-sm font-medium text-foreground">Sin documentación</h3>
+                    <p className="mt-1 text-sm text-muted-foreground">
                       Este proyecto aún no tiene documentación generada.
                     </p>
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {activeTab === 'reliability' && (
+            <div className="rounded-2xl border border-border bg-card/95 p-6 shadow-sm">
+              {reliabilityQuery.isLoading ? (
+                <div className="flex items-center gap-3">
+                  <div className="h-6 w-6 animate-spin rounded-full border-b-2 border-primary" />
+                  <span className="text-muted-foreground">Cargando métricas de confiabilidad...</span>
+                </div>
+              ) : reliabilityQuery.error ? (
+                <div className="text-destructive">Error cargando métricas</div>
+              ) : (
+                (() => {
+                  const data = reliabilityQuery.data?.data?.data;
+                  const stats = data?.stats || {};
+                  const score = data?.reliabilityScore ?? 0;
+                  const datasets = data?.datasets || [];
+                  const actions = data?.recommendedActions || [];
+                  const activeAlerts = data?.activeAlerts || data?.alerts?.filter((alert: any) => alert.active) || [];
+
+                  return (
+                    <div className="space-y-6">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="text-lg font-bold text-foreground">Confiabilidad técnica</h3>
+                          <p className="text-sm text-muted-foreground">Resumen de calidad de datos, estado y acciones recomendadas.</p>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xs text-muted-foreground">Puntuación</div>
+                          <div className="text-2xl font-bold text-primary">{score}%</div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="rounded-xl border border-border bg-background/70 p-4">
+                          <div className="text-xs text-muted-foreground">Datasets</div>
+                          <div className="text-lg font-semibold">{stats.totalDatasets || 0}</div>
+                        </div>
+                        <div className="rounded-xl border border-border bg-background/70 p-4">
+                          <div className="text-xs text-muted-foreground">Filas totales</div>
+                          <div className="text-lg font-semibold">{stats.totalRows || 0}</div>
+                        </div>
+                        <div className="rounded-xl border border-border bg-background/70 p-4">
+                          <div className="text-xs text-muted-foreground">Tamaño total</div>
+                          <div className="text-lg font-semibold">{(stats.totalSize || 0).toLocaleString()} bytes</div>
+                        </div>
+                      </div>
+
+                      {activeAlerts.length > 0 && (
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2">
+                            <ExclamationTriangleIcon className="h-5 w-5 text-amber-500" />
+                            <h4 className="text-sm font-semibold text-foreground">Alertas automáticas activas</h4>
+                          </div>
+                          <div className="space-y-3">
+                            {activeAlerts.map((alert: any, index: number) => (
+                              <div
+                                key={`${alert.ruleId}-${index}`}
+                                className={`rounded-xl border p-4 ${alert.severity === 'critical' ? 'bg-red-500/10 border-red-500/20' : 'bg-amber-500/10 border-amber-500/20'}`}
+                              >
+                                <div className="flex items-start justify-between gap-4">
+                                  <div>
+                                    <div className={`text-sm font-semibold ${alert.severity === 'critical' ? 'text-red-300' : 'text-amber-300'}`}>
+                                      {alert.severity === 'critical' ? 'Crítica' : 'Advertencia'} · {alert.metric}
+                                    </div>
+                                    <p className="mt-1 text-sm text-muted-foreground">{alert.message}</p>
+                                  </div>
+                                  <div className="text-right text-xs text-muted-foreground">
+                                    <div>Valor actual: {alert.currentValue}%</div>
+                                    <div>Umbral: {alert.threshold}%</div>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="rounded-xl border border-border bg-background/70 p-4">
+                        <h4 className="mb-2 text-sm font-semibold">Datasets</h4>
+                        {datasets.length === 0 ? (
+                          <div className="text-sm text-muted-foreground">No hay datasets</div>
+                        ) : (
+                          <div className="space-y-3">
+                            {datasets.map((d: any) => (
+                              <div key={d.id} className="flex items-center justify-between rounded-lg border border-border bg-card/70 p-2">
+                                <div>
+                                  <div className="font-medium text-foreground">{d.originalName}</div>
+                                  <div className="text-xs text-muted-foreground">{d.rowCount} filas • {d.columnsCount} columnas • {d.nullableColumns} columnas nulas</div>
+                                </div>
+                                <div className="text-xs text-muted-foreground">{new Date(d.uploadedAt).toLocaleString()}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {actions.length > 0 && (
+                        <div className="rounded-xl border border-border bg-card/80 p-4">
+                          <h4 className="mb-2 text-sm font-semibold">Acciones recomendadas</h4>
+                          <ul className="list-disc list-inside text-sm text-muted-foreground">
+                            {actions.map((a: string, i: number) => (<li key={i}>{a}</li>))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()
+              )}
             </div>
           )}
         </motion.div>
@@ -993,12 +1281,12 @@ export default function ProjectDetailPage() {
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0 }}
               transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-              className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden"
+              className="w-full max-w-lg overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
             >
               {/* Header */}
-              <div className="px-6 py-5 bg-gradient-to-r from-violet-600 to-indigo-600 flex items-center justify-between">
+              <div className="flex items-center justify-between bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 px-6 py-5">
                 <div className="flex items-center gap-3">
-                  <div className="p-1.5 bg-white/20 rounded-lg">
+                  <div className="rounded-lg bg-white/10 p-1.5">
                     <SparklesIcon className="h-5 w-5 text-white" />
                   </div>
                   <div>
@@ -1015,9 +1303,9 @@ export default function ProjectDetailPage() {
               </div>
 
               {/* Body */}
-              <div className="px-6 py-5 space-y-4">
+              <div className="space-y-4 px-6 py-5">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  <label className="mb-1.5 block text-sm font-medium text-foreground">
                     ¿Qué gráfico quieres generar?
                   </label>
                   <textarea
@@ -1031,16 +1319,16 @@ export default function ProjectDetailPage() {
                     disabled={generateWidgetMutation.isPending}
                     placeholder="Ej: genera un gráfico de barras de ventas por región, muestra la distribución de productos en un pie chart, crea una línea de tendencia de ingresos por mes..."
                     rows={4}
-                    className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-800 placeholder-gray-400 resize-none focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:bg-gray-50"
+                    className="w-full resize-none rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-transparent focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
                   />
-                  <p className="mt-1 text-xs text-gray-400">
+                  <p className="mt-1 text-xs text-muted-foreground">
                     Ctrl+Enter para generar • La IA elegirá las columnas más adecuadas del dataset
                   </p>
                 </div>
 
                 {/* Example prompts */}
                 <div className="space-y-1.5">
-                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Ejemplos rápidos</p>
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Ejemplos rápidos</p>
                   <div className="flex flex-wrap gap-2">
                     {[
                       'Gráfico de barras por categoría',
@@ -1052,7 +1340,7 @@ export default function ProjectDetailPage() {
                         key={example}
                         onClick={() => setCustomWidgetPrompt(example)}
                         disabled={generateWidgetMutation.isPending}
-                        className="px-2.5 py-1 rounded-full text-xs bg-violet-50 text-violet-700 border border-violet-200 hover:bg-violet-100 transition-colors disabled:opacity-50"
+                        className="rounded-full border border-border bg-background px-2.5 py-1 text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-50"
                       >
                         {example}
                       </button>
@@ -1062,18 +1350,18 @@ export default function ProjectDetailPage() {
               </div>
 
               {/* Footer */}
-              <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex items-center justify-end gap-3">
+              <div className="flex items-center justify-end gap-3 border-t border-border bg-muted/30 px-6 py-4">
                 <button
                   onClick={() => { setShowCustomWidgetModal(false); setCustomWidgetPrompt(''); }}
                   disabled={generateWidgetMutation.isPending}
-                  className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors disabled:opacity-50"
+                  className="rounded-lg px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
                 >
                   Cancelar
                 </button>
                 <button
                   onClick={() => generateWidgetMutation.mutate(customWidgetPrompt.trim())}
                   disabled={!customWidgetPrompt.trim() || generateWidgetMutation.isPending}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-sm font-medium shadow-sm hover:from-violet-700 hover:to-indigo-700 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
+                  className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-all hover:opacity-90 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100"
                 >
                   {generateWidgetMutation.isPending ? (
                     <>
@@ -1111,22 +1399,22 @@ export default function ProjectDetailPage() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
               transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-              className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl flex flex-col overflow-hidden"
+              className="flex w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
               style={{ maxHeight: '90vh' }}
             >
               {/* Modal header */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-slate-50 to-blue-50 flex-shrink-0">
+              <div className="flex flex-shrink-0 items-center justify-between border-b border-border bg-muted/40 px-6 py-4">
                 <div className="flex items-center gap-3">
-                  <div className="p-2 bg-blue-100 rounded-lg">
-                    <SparklesIcon className="h-5 w-5 text-blue-600" />
+                  <div className="rounded-lg bg-primary/10 p-2">
+                    <SparklesIcon className="h-5 w-5 text-primary" />
                   </div>
                   <div>
-                    <h2 className="text-base font-bold text-gray-900">{activeWidget.widget.title}</h2>
-                    <p className="text-xs text-gray-500">Análisis inteligente con Gemini AI</p>
+                    <h2 className="text-base font-bold text-foreground">{activeWidget.widget.title}</h2>
+                    <p className="text-xs text-muted-foreground">Análisis inteligente con Gemini AI</p>
                   </div>
                 </div>
-                <button onClick={closeModal} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
-                  <XMarkIcon className="h-5 w-5 text-gray-500" />
+                <button onClick={closeModal} className="rounded-lg p-1.5 transition-colors hover:bg-accent">
+                  <XMarkIcon className="h-5 w-5 text-muted-foreground" />
                 </button>
               </div>
 
@@ -1134,10 +1422,10 @@ export default function ProjectDetailPage() {
               <div className="flex flex-1 overflow-hidden" style={{ minHeight: 0 }}>
 
                 {/* Left: chart + data + downloads */}
-                <div className="w-[45%] border-r border-gray-100 flex flex-col gap-4 p-5 overflow-y-auto">
+                <div className="flex w-[45%] flex-col gap-4 overflow-y-auto border-r border-border p-5">
 
                   {/* Chart */}
-                  <div ref={chartExportRef} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                  <div ref={chartExportRef} className="rounded-xl border border-border bg-background/70 p-3">
                     <ResponsiveContainer width="100%" height={240}>
                       {activeWidget.chartType === 'pie' ? (
                         <PieChart>
@@ -1180,51 +1468,51 @@ export default function ProjectDetailPage() {
 
                   {/* Axis badges */}
                   {activeWidget.chartType !== 'pie' && (
-                    <div className="flex items-center gap-3 px-1">
-                      <span className="w-5 h-5 rounded bg-gray-200 text-gray-600 text-[9px] font-bold flex items-center justify-center">X</span>
-                      <span className="text-xs text-gray-600 font-medium">{activeWidget.xKey}</span>
-                      <div className="w-px h-3 bg-gray-200" />
-                      <span className="w-5 h-5 rounded bg-blue-100 text-blue-600 text-[9px] font-bold flex items-center justify-center">Y</span>
-                      <span className="text-xs text-gray-600 font-medium">{activeWidget.yKey}</span>
-                      <span className="ml-auto text-[10px] text-gray-400 bg-gray-50 px-2 py-0.5 rounded border border-gray-100 capitalize">{activeWidget.chartType}</span>
+                      <div className="flex items-center gap-3 px-1">
+                        <span className="flex h-5 w-5 items-center justify-center rounded bg-muted text-[9px] font-bold text-muted-foreground">X</span>
+                        <span className="text-xs font-medium text-muted-foreground">{activeWidget.xKey}</span>
+                        <div className="h-3 w-px bg-border" />
+                        <span className="flex h-5 w-5 items-center justify-center rounded bg-primary/10 text-[9px] font-bold text-primary">Y</span>
+                        <span className="text-xs font-medium text-muted-foreground">{activeWidget.yKey}</span>
+                        <span className="ml-auto rounded border border-border bg-background/60 px-2 py-0.5 text-[10px] capitalize text-muted-foreground">{activeWidget.chartType}</span>
                     </div>
                   )}
 
                   {/* Download */}
                   <div>
-                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Descargar</p>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Descargar</p>
                     <div className="grid grid-cols-3 gap-2">
-                      <button onClick={downloadCSV} className="flex flex-col items-center gap-1.5 p-3 rounded-xl border border-gray-200 hover:border-emerald-300 hover:bg-emerald-50 transition-all group">
-                        <TableIcon className="h-5 w-5 text-gray-400 group-hover:text-emerald-600 transition-colors" />
-                        <span className="text-[10px] font-semibold text-gray-500 group-hover:text-emerald-700">CSV</span>
+                      <button onClick={downloadCSV} className="group flex flex-col items-center gap-1.5 rounded-xl border border-border bg-background/60 p-3 transition-all hover:border-emerald-400/50 hover:bg-emerald-500/10">
+                        <TableIcon className="h-5 w-5 text-muted-foreground transition-colors group-hover:text-emerald-400" />
+                        <span className="text-[10px] font-semibold text-muted-foreground group-hover:text-emerald-300">CSV</span>
                       </button>
-                      <button onClick={downloadJSON} className="flex flex-col items-center gap-1.5 p-3 rounded-xl border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-all group">
-                        <CodeBracketIcon className="h-5 w-5 text-gray-400 group-hover:text-blue-600 transition-colors" />
-                        <span className="text-[10px] font-semibold text-gray-500 group-hover:text-blue-700">JSON</span>
+                      <button onClick={downloadJSON} className="group flex flex-col items-center gap-1.5 rounded-xl border border-border bg-background/60 p-3 transition-all hover:border-blue-400/50 hover:bg-blue-500/10">
+                        <CodeBracketIcon className="h-5 w-5 text-muted-foreground transition-colors group-hover:text-blue-400" />
+                        <span className="text-[10px] font-semibold text-muted-foreground group-hover:text-blue-300">JSON</span>
                       </button>
-                      <button onClick={downloadSVG} className="flex flex-col items-center gap-1.5 p-3 rounded-xl border border-gray-200 hover:border-violet-300 hover:bg-violet-50 transition-all group">
-                        <PhotoIcon className="h-5 w-5 text-gray-400 group-hover:text-violet-600 transition-colors" />
-                        <span className="text-[10px] font-semibold text-gray-500 group-hover:text-violet-700">SVG</span>
+                      <button onClick={downloadSVG} className="group flex flex-col items-center gap-1.5 rounded-xl border border-border bg-background/60 p-3 transition-all hover:border-violet-400/50 hover:bg-violet-500/10">
+                        <PhotoIcon className="h-5 w-5 text-muted-foreground transition-colors group-hover:text-violet-400" />
+                        <span className="text-[10px] font-semibold text-muted-foreground group-hover:text-violet-300">SVG</span>
                       </button>
                     </div>
                   </div>
 
                   {/* Data table */}
                   <div>
-                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Datos</p>
-                    <div className="border border-gray-200 rounded-xl overflow-hidden">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Datos</p>
+                    <div className="overflow-hidden rounded-xl border border-border">
                       <table className="w-full text-xs">
-                        <thead className="bg-gray-50">
+                        <thead className="bg-muted/40">
                           <tr>
-                            <th className="text-left px-3 py-2 font-semibold text-gray-600 border-b border-gray-100">{activeWidget.xKey}</th>
-                            <th className="text-right px-3 py-2 font-semibold text-gray-600 border-b border-gray-100">{activeWidget.yKey}</th>
+                            <th className="border-b border-border px-3 py-2 text-left font-semibold text-muted-foreground">{activeWidget.xKey}</th>
+                            <th className="border-b border-border px-3 py-2 text-right font-semibold text-muted-foreground">{activeWidget.yKey}</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-gray-50">
+                        <tbody className="divide-y divide-border">
                           {activeWidget.chartData.map((d, i) => (
-                            <tr key={i} className="hover:bg-gray-50">
-                              <td className="px-3 py-1.5 text-gray-700 font-medium truncate max-w-[120px]">{d.name}</td>
-                              <td className="px-3 py-1.5 text-gray-600 text-right tabular-nums">{d.value.toLocaleString()}</td>
+                            <tr key={i} className="hover:bg-accent/50">
+                              <td className="max-w-[120px] truncate px-3 py-1.5 font-medium text-foreground">{d.name}</td>
+                              <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">{d.value.toLocaleString()}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -1237,16 +1525,16 @@ export default function ProjectDetailPage() {
                 <div className="flex-1 flex flex-col" style={{ minWidth: 0 }}>
 
                   {/* Chat header */}
-                  <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2.5 bg-slate-50 flex-shrink-0">
-                    <div className="p-1.5 bg-blue-600 rounded-lg">
+                  <div className="flex flex-shrink-0 items-center gap-2.5 border-b border-border bg-muted/40 px-5 py-3">
+                    <div className="rounded-lg bg-primary p-1.5">
                       <ChatBubbleLeftRightIcon className="h-4 w-4 text-white" />
                     </div>
                     <div>
-                      <p className="text-sm font-semibold text-gray-800">Analista IA</p>
-                      <p className="text-[10px] text-gray-500">Consulta sobre este gráfico</p>
+                      <p className="text-sm font-semibold text-foreground">Analista IA</p>
+                      <p className="text-[10px] text-muted-foreground">Consulta sobre este gráfico</p>
                     </div>
-                    <span className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-600 text-[10px] font-semibold">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                    <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
                       En línea
                     </span>
                   </div>
@@ -1255,21 +1543,21 @@ export default function ProjectDetailPage() {
                   <div className="flex-1 overflow-y-auto p-5 space-y-4">
                     {chatHistory.map((msg, i) => (
                       <div key={i} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
-                        <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gradient-to-br from-violet-500 to-blue-600 text-white'}`}>
+                        <div className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-xs font-bold ${msg.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-gradient-to-br from-violet-500 to-blue-600 text-white'}`}>
                           {msg.role === 'user' ? 'T' : 'IA'}
                         </div>
-                        <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-tr-sm' : 'bg-gray-100 text-gray-800 rounded-tl-sm'}`}>
+                        <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${msg.role === 'user' ? 'rounded-tr-sm bg-primary text-primary-foreground' : 'rounded-tl-sm bg-muted text-foreground'}`}>
                           {msg.role === 'ai' ? renderMarkdown(msg.text) : msg.text}
                         </div>
                       </div>
                     ))}
                     {isChatLoading && (
                       <div className="flex gap-3">
-                        <div className="w-7 h-7 rounded-full bg-gradient-to-br from-violet-500 to-blue-600 flex items-center justify-center text-xs font-bold text-white flex-shrink-0">IA</div>
-                        <div className="bg-gray-100 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-                          <span className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-                          <span className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                        <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-blue-600 text-xs font-bold text-white">IA</div>
+                        <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-3 flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '0ms' }} />
+                          <span className="w-2 h-2 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '150ms' }} />
+                          <span className="w-2 h-2 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '300ms' }} />
                         </div>
                       </div>
                     )}
@@ -1278,7 +1566,7 @@ export default function ProjectDetailPage() {
 
                   {/* Suggested prompts */}
                   {chatHistory.length <= 1 && (
-                    <div className="px-5 pb-2 flex flex-wrap gap-1.5">
+                    <div className="flex flex-wrap gap-1.5 px-5 pb-2">
                       {[
                         `\u00bfCuál es el valor más alto de ${activeWidget.yKey}?`,
                         '\u00bfQué tendencia observas?',
@@ -1289,7 +1577,7 @@ export default function ProjectDetailPage() {
                         <button
                           key={prompt}
                           onClick={() => setChatInput(prompt)}
-                          className="px-3 py-1.5 text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded-full hover:bg-blue-100 transition-colors text-left"
+                          className="rounded-full border border-border bg-background px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent"
                         >
                           {prompt}
                         </button>
@@ -1298,7 +1586,7 @@ export default function ProjectDetailPage() {
                   )}
 
                   {/* Input */}
-                  <div className="px-5 py-4 border-t border-gray-100 bg-white flex-shrink-0">
+                  <div className="flex-shrink-0 border-t border-border bg-card px-5 py-4">
                     <div className="flex items-end gap-2">
                       <textarea
                         value={chatInput}
@@ -1306,17 +1594,17 @@ export default function ProjectDetailPage() {
                         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendChat(); } }}
                         placeholder="Pregunta sobre este gráfico... (Enter para enviar)"
                         rows={2}
-                        className="flex-1 resize-none px-3.5 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-gray-400"
+                        className="flex-1 resize-none rounded-xl border border-border bg-background px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-transparent focus:outline-none focus:ring-2 focus:ring-primary"
                       />
                       <button
                         onClick={handleSendChat}
                         disabled={!chatInput.trim() || isChatLoading}
-                        className="p-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                        className="flex-shrink-0 rounded-xl bg-primary p-2.5 text-primary-foreground transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <PaperAirplaneIcon className="h-5 w-5" />
                       </button>
                     </div>
-                    <p className="text-[10px] text-gray-400 mt-1.5 text-center">Respuestas generadas con Gemini AI · basadas en los datos reales</p>
+                    <p className="mt-1.5 text-center text-[10px] text-muted-foreground">Respuestas generadas con Gemini AI · basadas en los datos reales</p>
                   </div>
                 </div>
               </div>
@@ -1326,4 +1614,22 @@ export default function ProjectDetailPage() {
       </AnimatePresence>
     </div>
   );
+}
+
+function sanitizeHtmlForIframe(html: string): string {
+  let safeHtml = html;
+
+  // Remove active content and inline handlers from AI-generated HTML.
+  safeHtml = safeHtml.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '');
+  safeHtml = safeHtml.replace(/<iframe[\s\S]*?>[\s\S]*?<\/iframe>/gi, '');
+  safeHtml = safeHtml.replace(/<object[\s\S]*?>[\s\S]*?<\/object>/gi, '');
+  safeHtml = safeHtml.replace(/<embed[\s\S]*?>/gi, '');
+  safeHtml = safeHtml.replace(/<link[\s\S]*?>/gi, '');
+  safeHtml = safeHtml.replace(/\son\w+\s*=\s*"[^"]*"/gi, '');
+  safeHtml = safeHtml.replace(/\son\w+\s*=\s*'[^']*'/gi, '');
+  safeHtml = safeHtml.replace(/\son\w+\s*=\s*[^\s>]+/gi, '');
+  safeHtml = safeHtml.replace(/(href|src)\s*=\s*"\s*javascript:[^"]*"/gi, '$1="#"');
+  safeHtml = safeHtml.replace(/(href|src)\s*=\s*'\s*javascript:[^']*'/gi, '$1="#"');
+
+  return safeHtml;
 }

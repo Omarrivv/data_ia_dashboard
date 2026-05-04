@@ -23,10 +23,10 @@ export default function DashboardLayout({
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center" suppressHydrationWarning>
+      <div className="min-h-screen bg-background text-foreground flex items-center justify-center" suppressHydrationWarning>
         <div className="flex items-center space-x-2">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-          <span className="text-gray-600">Cargando...</span>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          <span className="text-muted-foreground">Cargando...</span>
         </div>
       </div>
     );
@@ -38,11 +38,11 @@ export default function DashboardLayout({
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-gray-50 dark:bg-slate-950" suppressHydrationWarning>
+      <div className="min-h-screen bg-background text-foreground flex" suppressHydrationWarning>
         <DashboardSidebar />
-        <div className="lg:pl-64" suppressHydrationWarning>
+        <div className="flex-1 flex flex-col lg:pl-64">
           <DashboardHeader />
-          <main className="py-6">
+          <main className="dashboard-content-scroll py-6">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8" suppressHydrationWarning>
               {children}
             </div>

@@ -1,14 +1,33 @@
 import mongoose, { Document, Schema } from 'mongoose';
-import { Project as IProject, ProjectStatus, Dataset, Dashboard } from '../types';
+import { Project as IProject, ProjectStatus, Dataset, Dashboard, ProjectDomain, ProjectSharePermission, ProjectAlertSeverity, ProjectAlertRuleId } from '../types';
 // Interfaz para el documento de proyecto
 export interface ProjectDocument extends Document {
   name: string;
   description?: string;
   userId: any;
+  domain?: ProjectDomain;
+  sharing?: {
+    enabled: boolean;
+    token: string;
+    permission: ProjectSharePermission;
+    updatedAt?: Date;
+  };
   status: ProjectStatus;
   datasets: any[];
   dashboard?: any;
   documentation?: string;
+  alerts?: Array<{
+    ruleId: ProjectAlertRuleId;
+    metric: 'reliabilityScore';
+    severity: ProjectAlertSeverity;
+    threshold: number;
+    currentValue: number;
+    message: string;
+    active: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+    resolvedAt?: Date | null;
+  }>;
   createdAt: Date;
   updatedAt: Date;
   getStats(): any;
@@ -122,6 +141,52 @@ const dashboardSchema = new Schema({
     default: Date.now
   }
 });
+
+const alertSchema = new Schema({
+  ruleId: {
+    type: String,
+    enum: ['reliability_warning', 'reliability_critical'],
+    required: true
+  },
+  metric: {
+    type: String,
+    enum: ['reliabilityScore'],
+    required: true
+  },
+  severity: {
+    type: String,
+    enum: ['warning', 'critical'],
+    required: true
+  },
+  threshold: {
+    type: Number,
+    required: true
+  },
+  currentValue: {
+    type: Number,
+    required: true
+  },
+  message: {
+    type: String,
+    required: true
+  },
+  active: {
+    type: Boolean,
+    default: true
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  },
+  resolvedAt: {
+    type: Date,
+    default: null
+  }
+}, { _id: false });
 // Esquema de proyecto
 const projectSchema = new Schema<ProjectDocument>({
   name: {
@@ -134,6 +199,12 @@ const projectSchema = new Schema<ProjectDocument>({
     type: String,
     trim: true,
     maxlength: [1000, 'La descripción no puede exceder 1000 caracteres']
+  },
+  domain: {
+    type: String,
+    enum: ['sales', 'marketing', 'finance', 'operations', 'custom'],
+    default: 'sales',
+    index: true
   },
   userId: {
     type: Schema.Types.ObjectId,
@@ -151,6 +222,30 @@ const projectSchema = new Schema<ProjectDocument>({
   documentation: {
     type: String,
     maxlength: [200000, 'La documentación no puede exceder 200000 caracteres']
+  },
+  alerts: {
+    type: [alertSchema],
+    default: []
+  },
+  sharing: {
+    enabled: {
+      type: Boolean,
+      default: false
+    },
+    token: {
+      type: String,
+      default: null,
+      index: { unique: true, sparse: true }
+    },
+    permission: {
+      type: String,
+      enum: ['viewer', 'editor'],
+      default: 'viewer'
+    },
+    updatedAt: {
+      type: Date,
+      default: null
+    }
   }
 }, {
   timestamps: true,

@@ -26,8 +26,8 @@ import {
 import { projectsApi } from '@/lib/api';
 
 const STATUS_COLORS: Record<string, string> = {
-  ready: '#22c55e',
-  processing: '#3b82f6',
+  ready: '#10b981',
+  processing: '#6366f1',
   pending: '#f59e0b',
   error: '#ef4444',
 };
@@ -39,7 +39,7 @@ const STATUS_LABELS: Record<string, string> = {
   error: 'Error',
 };
 
-const PIE_COLORS = ['#3b82f6', '#8b5cf6', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4'];
+const PIE_COLORS = ['#6366f1', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
 export default function AnalyticsPage() {
   const { data, isLoading } = useQuery({
@@ -92,16 +92,16 @@ export default function AnalyticsPage() {
   const monthlyData = Object.entries(monthlyMap).map(([mes, proyectos]) => ({ mes, proyectos }));
 
   const stats = [
-    { label: 'Proyectos totales', value: totalProjects, icon: FolderIcon, bg: 'bg-blue-50', text: 'text-blue-600', border: 'border-blue-100' },
-    { label: 'Datasets subidos', value: totalDatasets, icon: DocumentTextIcon, bg: 'bg-violet-50', text: 'text-violet-600', border: 'border-violet-100' },
-    { label: 'Filas procesadas', value: totalRows.toLocaleString('es-ES'), icon: TableCellsIcon, bg: 'bg-emerald-50', text: 'text-emerald-600', border: 'border-emerald-100' },
-    { label: 'Con análisis IA', value: analyzedProjects, icon: ChartBarIcon, bg: 'bg-amber-50', text: 'text-amber-600', border: 'border-amber-100' },
+    { label: 'Proyectos totales', value: totalProjects, icon: FolderIcon, bg: 'bg-primary/10', text: 'text-primary', border: 'border-border' },
+    { label: 'Datasets subidos', value: totalDatasets, icon: DocumentTextIcon, bg: 'bg-indigo-500/10', text: 'text-indigo-600 dark:text-indigo-300', border: 'border-border' },
+    { label: 'Filas procesadas', value: totalRows.toLocaleString('es-ES'), icon: TableCellsIcon, bg: 'bg-emerald-500/10', text: 'text-emerald-600 dark:text-emerald-300', border: 'border-border' },
+    { label: 'Con análisis IA', value: analyzedProjects, icon: ChartBarIcon, bg: 'bg-amber-500/10', text: 'text-amber-600 dark:text-amber-300', border: 'border-border' },
   ];
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
       </div>
     );
   }
@@ -109,8 +109,8 @@ export default function AnalyticsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Analytics</h1>
-        <p className="text-gray-500 text-sm mt-1">Resumen de actividad y uso de la plataforma</p>
+        <h1 className="text-2xl font-bold text-foreground">Analytics</h1>
+        <p className="text-muted-foreground text-sm mt-1">Resumen de actividad y uso de la plataforma</p>
       </div>
 
       {/* KPI cards */}
@@ -121,13 +121,13 @@ export default function AnalyticsPage() {
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.07 }}
-            className={`bg-white rounded-xl border ${s.border} p-5 shadow-sm`}
+            className={`bg-card/95 backdrop-blur-sm rounded-xl border ${s.border} p-5 shadow-sm`}
           >
             <div className={`inline-flex items-center justify-center w-10 h-10 ${s.bg} rounded-lg mb-3`}>
               <s.icon className={`h-5 w-5 ${s.text}`} />
             </div>
-            <p className="text-2xl font-bold text-gray-900">{s.value}</p>
-            <p className="text-xs text-gray-500 mt-0.5">{s.label}</p>
+            <p className="text-2xl font-bold text-foreground">{s.value}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{s.label}</p>
           </motion.div>
         ))}
       </div>
@@ -138,19 +138,19 @@ export default function AnalyticsPage() {
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3 }}
-          className="lg:col-span-2 bg-white rounded-xl border border-gray-200 shadow-sm p-5"
+          className="lg:col-span-2 bg-card/95 backdrop-blur-sm rounded-xl border border-border shadow-sm p-5"
         >
-          <h2 className="text-sm font-semibold text-gray-700 mb-4">Proyectos creados por mes</h2>
+          <h2 className="text-sm font-semibold text-foreground mb-4">Proyectos creados por mes</h2>
           {monthlyData.every((d) => d.proyectos === 0) ? (
-            <div className="flex items-center justify-center h-40 text-gray-400 text-sm">Sin datos suficientes</div>
+            <div className="flex items-center justify-center h-40 text-muted-foreground text-sm">Sin datos suficientes</div>
           ) : (
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={monthlyData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis dataKey="mes" tick={{ fontSize: 11 }} />
                 <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
                 <Tooltip />
-                <Line type="monotone" dataKey="proyectos" stroke="#3b82f6" strokeWidth={2.5} dot={{ r: 4 }} name="Proyectos" />
+                <Line type="monotone" dataKey="proyectos" stroke="#6366f1" strokeWidth={2.5} dot={{ r: 4 }} name="Proyectos" />
               </LineChart>
             </ResponsiveContainer>
           )}
@@ -161,11 +161,11 @@ export default function AnalyticsPage() {
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.35 }}
-          className="bg-white rounded-xl border border-gray-200 shadow-sm p-5"
+          className="bg-card/95 backdrop-blur-sm rounded-xl border border-border shadow-sm p-5"
         >
-          <h2 className="text-sm font-semibold text-gray-700 mb-4">Estado de proyectos</h2>
+          <h2 className="text-sm font-semibold text-foreground mb-4">Estado de proyectos</h2>
           {statusData.length === 0 ? (
-            <div className="flex items-center justify-center h-40 text-gray-400 text-sm">Sin proyectos</div>
+            <div className="flex items-center justify-center h-40 text-muted-foreground text-sm">Sin proyectos</div>
           ) : (
             <>
               <ResponsiveContainer width="100%" height={160}>
@@ -180,7 +180,7 @@ export default function AnalyticsPage() {
               </ResponsiveContainer>
               <div className="space-y-1.5 mt-2">
                 {statusData.map((d) => (
-                  <div key={d.name} className="flex items-center gap-2 text-xs text-gray-600">
+                  <div key={d.name} className="flex items-center gap-2 text-xs text-muted-foreground">
                     <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: d.color }} />
                     <span>{d.name}</span>
                     <span className="ml-auto font-medium">{d.value}</span>
@@ -198,23 +198,23 @@ export default function AnalyticsPage() {
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.4 }}
-          className="bg-white rounded-xl border border-gray-200 shadow-sm p-5"
+          className="bg-card/95 backdrop-blur-sm rounded-xl border border-border shadow-sm p-5"
         >
-          <h2 className="text-sm font-semibold text-gray-700 mb-4">Datasets por proyecto</h2>
+          <h2 className="text-sm font-semibold text-foreground mb-4">Datasets por proyecto</h2>
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={datasetsBar} margin={{ top: 0, right: 10, left: -10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis dataKey="name" tick={{ fontSize: 11 }} />
               <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
               <Tooltip />
-              <Bar dataKey="datasets" fill="#8b5cf6" radius={[4, 4, 0, 0]} name="Datasets" />
+              <Bar dataKey="datasets" fill="#6366f1" radius={[4, 4, 0, 0]} name="Datasets" />
             </BarChart>
           </ResponsiveContainer>
         </motion.div>
       )}
 
       {totalProjects === 0 && (
-        <div className="text-center py-20 text-gray-400">
+        <div className="text-center py-20 text-muted-foreground">
           <ChartBarIcon className="h-12 w-12 mx-auto mb-3 opacity-30" />
           <p className="text-sm">Crea proyectos para ver estadísticas aquí</p>
         </div>

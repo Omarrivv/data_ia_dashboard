@@ -147,11 +147,12 @@ export default function EditProjectPage() {
     onDrop,
     accept: {
       'text/csv': ['.csv'],
+      'application/json': ['.json'],
       'application/vnd.ms-excel': ['.xls'],
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
     },
     multiple: true,
-    maxSize: 50 * 1024 * 1024, // 50MB
+    maxSize: 10 * 1024 * 1024, // 10MB
   });
 
   const onSubmit = (data: EditProjectData) => {

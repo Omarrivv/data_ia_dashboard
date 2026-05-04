@@ -4,6 +4,7 @@ export interface User {
   _id: string;
   email: string;
   name: string;
+  role: UserRole;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -13,11 +14,23 @@ export interface Project {
   name: string;
   description: string;
   userId: string;
+  domain?: ProjectDomain;
+  sharing?: ProjectSharing;
+  access?: 'owner' | 'viewer' | 'editor';
+  shareLink?: string;
+  status?: string;
   datasets: Dataset[];
   dashboard?: Dashboard;
   documentation?: string;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface ProjectStats {
+  totalDatasets: number;
+  totalRows: number;
+  hasDocumentation?: boolean;
+  hasDashboard?: boolean;
 }
 
 export interface Dataset {
@@ -92,7 +105,27 @@ export interface DashboardLayout {
 
 export interface AuthResponse {
   user: User;
-  token: string;
+  token?: string;
+}
+
+export interface AuditLogEntry {
+  _id: string;
+  userId?: string;
+  action: string;
+  resourceType: string;
+  resourceId?: string;
+  success: boolean;
+  metadata?: Record<string, unknown>;
+  ipAddress?: string;
+  userAgent?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AuditSummary {
+  totalLogs: number;
+  recentLogs: AuditLogEntry[];
+  actions: Array<{ _id: string; count: number }>;
 }
 
 export interface ApiResponse<T = any> {
@@ -116,6 +149,7 @@ export interface RegisterRequest {
 export interface CreateProjectRequest {
   name: string;
   description: string;
+  domain?: ProjectDomain;
 }
 
 export interface AnalyzeDataRequest {
@@ -138,6 +172,17 @@ export interface VisualizationRecommendation {
   description: string;
   dataColumns: string[];
   reasoning: string;
+}
+
+export type ProjectDomain = 'sales' | 'marketing' | 'finance' | 'operations' | 'custom';
+
+export type ProjectSharePermission = 'viewer' | 'editor';
+
+export interface ProjectSharing {
+  enabled: boolean;
+  token: string;
+  permission: ProjectSharePermission;
+  updatedAt?: Date;
 }
 
 // Enums
