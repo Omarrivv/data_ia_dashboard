@@ -4,29 +4,71 @@ import { Project } from '../models/Project';
 import { authenticate } from '../middleware/auth';
 import { asyncHandler, createError } from '../middleware/errorHandler';
 import { geminiService } from '../services/geminiService';
-import { ApiResponse, CreateProjectRequest, UpdateProject, ProjectStatus, GeminiAnalysisResult, Widget } from '../types';
+import { runProjectAnalysis } from '../services/projectAnalysisService';
+import { enqueueAnalysis } from '../services/jobQueueService';
+import { recordAuditEvent } from '../services/auditService';
+import { ApiResponse, CreateProjectRequest, UpdateProject, ProjectStatus, GeminiAnalysisResult, Widget, ProjectDomain, ProjectSharePermission } from '../types';
+import { sanitizeTextInput } from '../utils/validation';
+import { analysisLimiter } from '../middleware/rateLimiters';
+import { getProjectAccess, getProjectSharingLink, getShareTokenFromRequest, ensureOwner } from '../middleware/projectAccess';
+import crypto from 'crypto';
+import { calculateReliabilityScore, syncReliabilityAlerts } from '../services/projectAlertService';
 
 const router = express.Router();
+
+const projectQuerySchema = Joi.object({
+  page: Joi.number().integer().min(1).max(1000).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(10),
+  search: Joi.string().trim().min(1).max(100).optional(),
+  status: Joi.string().valid(...Object.values(ProjectStatus)).optional()
+}).options({ abortEarly: false, stripUnknown: true, convert: true });
 
 // Aplicar autenticación a todas las rutas
 router.use(authenticate);
 
 // Esquemas de validación
 const createProjectSchema = Joi.object({
-  name: Joi.string().min(1).max(200).required().messages({
+  name: Joi.string().trim().min(1).max(200).required().messages({
     'string.min': 'El nombre del proyecto es requerido',
     'string.max': 'El nombre no puede exceder 200 caracteres',
     'any.required': 'El nombre del proyecto es requerido'
   }),
-  description: Joi.string().max(1000).optional().messages({
+  description: Joi.string().trim().max(1000).allow('').default('').messages({
     'string.max': 'La descripción no puede exceder 1000 caracteres'
-  })
-});
+  }),
+  domain: Joi.string().valid('sales', 'marketing', 'finance', 'operations', 'custom').default('sales')
+}).options({ abortEarly: false, stripUnknown: true, convert: true });
+
+const shareProjectSchema = Joi.object({
+  enabled: Joi.boolean().required(),
+  permission: Joi.string().valid('viewer', 'editor').default('viewer'),
+  regenerateToken: Joi.boolean().default(false)
+}).options({ abortEarly: false, stripUnknown: true, convert: true });
 
 const updateProjectSchema = Joi.object({
-  name: Joi.string().min(1).max(200).optional(),
-  description: Joi.string().max(1000).optional()
-});
+  name: Joi.string().trim().min(1).max(200).optional(),
+  description: Joi.string().trim().max(1000).allow('').optional()
+}).min(1).options({ abortEarly: false, stripUnknown: true, convert: true });
+
+const generateWidgetSchema = Joi.object({
+  prompt: Joi.string().trim().min(10).max(1000).required()
+}).options({ abortEarly: false, stripUnknown: true, convert: true });
+
+const chatSchema = Joi.object({
+  message: Joi.string().trim().min(1).max(1000).required(),
+  widgetContext: Joi.object({
+    widgetTitle: Joi.string().trim().min(1).max(200).required(),
+    widgetDescription: Joi.string().trim().max(1000).allow(''),
+    chartType: Joi.string().valid('line', 'bar', 'pie', 'scatter', 'area').required(),
+    xKey: Joi.string().trim().min(1).max(100).required(),
+    yKey: Joi.string().trim().min(1).max(100).required(),
+    dataSample: Joi.array().max(50).required(),
+  }).unknown(true).required(),
+  conversationHistory: Joi.array().max(20).items(Joi.object({
+    role: Joi.string().valid('user', 'ai').required(),
+    text: Joi.string().trim().max(1000).required(),
+  })).default([]),
+}).options({ abortEarly: false, stripUnknown: true, convert: true });
 
 /**
  * @route   GET /api/projects
@@ -38,10 +80,12 @@ router.get('/', asyncHandler(async (req: express.Request, res: express.Response<
     throw createError('Usuario no autenticado', 401);
   }
 
-  const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 10;
-  const search = req.query.search as string;
-  const status = req.query.status as ProjectStatus;
+  const { error, value } = projectQuerySchema.validate(req.query);
+  if (error) {
+    throw createError(error.details[0].message, 400);
+  }
+
+  const { page, limit, search, status } = value;
 
   // Construir filtros
   const filters: any = { userId: req.user._id };
@@ -106,18 +150,33 @@ router.post('/', asyncHandler(async (req: express.Request, res: express.Response
     throw createError(error.details[0].message, 400);
   }
 
-  const { name, description }: CreateProjectRequest = value;
+  const sanitizedName = sanitizeTextInput(value.name, { maxLength: 200 });
+  if (!sanitizedName) {
+    throw createError('El nombre del proyecto es requerido', 400);
+  }
+
+  const sanitizedDescription = sanitizeTextInput(value.description || '', { maxLength: 1000, allowNewlines: true });
 
   // Crear proyecto
   const project = new Project({
-    name,
-    description,
+    name: sanitizedName,
+    description: sanitizedDescription,
+    domain: value.domain || 'sales',
     userId: req.user._id,
     status: ProjectStatus.DRAFT,
     datasets: []
   });
 
   await project.save();
+
+  recordAuditEvent({
+    userId: req.user._id.toString(),
+    action: 'project.create',
+    resourceType: 'project',
+    resourceId: project._id.toString(),
+    metadata: { name: project.name },
+    req,
+  });
 
   res.status(201).json({
     success: true,
@@ -136,24 +195,108 @@ router.get('/:id', asyncHandler(async (req: express.Request, res: express.Respon
     throw createError('Usuario no autenticado', 401);
   }
 
-  const project = await Project.findOne({
-    _id: req.params.id,
-    userId: req.user._id
-  });
+  const project = await Project.findById(req.params.id);
 
   if (!project) {
     throw createError('Proyecto no encontrado', 404);
   }
 
+  const access = getProjectAccess(project, req.user._id.toString(), 'viewer', getShareTokenFromRequest(req));
+
   // Agregar estadísticas
   const projectWithStats = {
     ...project.toJSON(),
-    stats: project.getStats()
+    stats: project.getStats(),
+    access: access.accessMode,
+    shareLink: project.sharing?.enabled && project.sharing?.token && access.accessMode === 'owner'
+      ? getProjectSharingLink(project._id.toString(), project.sharing.token)
+      : undefined
   };
 
   res.json({
     success: true,
     data: projectWithStats
+  });
+}));
+
+/**
+ * @route   GET /api/projects/:id/share
+ * @desc    Obtener configuración de compartición del proyecto
+ * @access  Private
+ */
+router.get('/:id/share', asyncHandler(async (req: express.Request, res: express.Response<ApiResponse>) => {
+  if (!req.user) {
+    throw createError('Usuario no autenticado', 401);
+  }
+
+  const project = await Project.findOne({ _id: req.params.id, userId: req.user._id });
+  if (!project) {
+    throw createError('Proyecto no encontrado', 404);
+  }
+
+  const token = project.sharing?.token;
+  res.json({
+    success: true,
+    data: {
+      enabled: !!project.sharing?.enabled,
+      permission: project.sharing?.permission || 'viewer',
+      shareLink: project.sharing?.enabled && token ? getProjectSharingLink(project._id.toString(), token) : null,
+      token: project.sharing?.enabled ? token : null,
+    }
+  });
+}));
+
+/**
+ * @route   PUT /api/projects/:id/share
+ * @desc    Crear o actualizar enlace compartido
+ * @access  Private
+ */
+router.put('/:id/share', asyncHandler(async (req: express.Request, res: express.Response<ApiResponse>) => {
+  if (!req.user) {
+    throw createError('Usuario no autenticado', 401);
+  }
+
+  const { error, value } = shareProjectSchema.validate(req.body);
+  if (error) {
+    throw createError(error.details[0].message, 400);
+  }
+
+  const project = await Project.findOne({ _id: req.params.id, userId: req.user._id });
+  if (!project) {
+    throw createError('Proyecto no encontrado', 404);
+  }
+
+  const nextToken = value.enabled
+    ? (value.regenerateToken || !project.sharing?.token ? crypto.randomUUID() : project.sharing.token)
+    : null;
+
+  project.sharing = {
+    enabled: value.enabled,
+    token: nextToken,
+    permission: value.permission || 'viewer',
+    updatedAt: new Date(),
+  } as any;
+
+  await project.save();
+
+  recordAuditEvent({
+    userId: req.user._id.toString(),
+    action: value.enabled ? 'project.share.enabled' : 'project.share.disabled',
+    resourceType: 'project',
+    resourceId: project._id.toString(),
+    metadata: { permission: value.permission || 'viewer' },
+    req,
+  });
+
+  res.json({
+    success: true,
+    data: {
+      enabled: !!project.sharing?.enabled,
+      permission: project.sharing?.permission || 'viewer',
+      shareLink: project.sharing?.enabled && project.sharing?.token ? getProjectSharingLink(project._id.toString(), project.sharing.token) : null,
+      token: project.sharing?.enabled ? project.sharing?.token : null,
+    },
+    message: value.enabled ? 'Enlace compartido creado' : 'Compartición desactivada'
   });
 }));
 
@@ -173,6 +316,18 @@ router.put('/:id', asyncHandler(async (req: express.Request, res: express.Respon
     throw createError(error.details[0].message, 400);
   }
 
+  if (value.name !== undefined) {
+    const sanitizedName = sanitizeTextInput(value.name, { maxLength: 200 });
+    if (!sanitizedName) {
+      throw createError('El nombre del proyecto es requerido', 400);
+    }
+    value.name = sanitizedName;
+  }
+
+  if (value.description !== undefined) {
+    value.description = sanitizeTextInput(value.description, { maxLength: 1000, allowNewlines: true });
+  }
+
   const project = await Project.findOneAndUpdate(
     { _id: req.params.id, userId: req.user._id },
     value,
@@ -182,6 +337,15 @@ router.put('/:id', asyncHandler(async (req: express.Request, res: express.Respon
   if (!project) {
     throw createError('Proyecto no encontrado', 404);
   }
+
+  recordAuditEvent({
+    userId: req.user._id.toString(),
+    action: 'project.update',
+    resourceType: 'project',
+    resourceId: project._id.toString(),
+    metadata: { fields: Object.keys(value) },
+    req,
+  });
 
   res.json({
     success: true,
@@ -209,6 +373,15 @@ router.delete('/:id', asyncHandler(async (req: express.Request, res: express.Res
     throw createError('Proyecto no encontrado', 404);
   }
 
+  recordAuditEvent({
+    userId: req.user._id.toString(),
+    action: 'project.delete',
+    resourceType: 'project',
+    resourceId: project._id.toString(),
+    metadata: { name: project.name },
+    req,
+  });
+
   res.json({
     success: true,
     message: 'Proyecto eliminado exitosamente'
@@ -220,205 +393,44 @@ router.delete('/:id', asyncHandler(async (req: express.Request, res: express.Res
  * @desc    Analizar proyecto con IA Gemini
  * @access  Private
  */
-router.post('/:id/analyze', asyncHandler(async (req: express.Request, res: express.Response<ApiResponse>) => {
+router.post('/:id/analyze', analysisLimiter, asyncHandler(async (req: express.Request, res: express.Response<ApiResponse>) => {
   if (!req.user) {
     throw createError('Usuario no autenticado', 401);
   }
 
-  const project = await Project.findOne({
-    _id: req.params.id,
-    userId: req.user._id
-  });
+  const project = await Project.findById(req.params.id);
 
   if (!project) {
     throw createError('Proyecto no encontrado', 404);
   }
 
+  getProjectAccess(project, req.user._id.toString(), 'editor', getShareTokenFromRequest(req));
+
   if (!project.datasets || project.datasets.length === 0) {
     throw createError('El proyecto no tiene datasets para analizar', 400);
   }
 
-  try {
-    // Cambiar estado a analizando
-    project.status = ProjectStatus.ANALYZING;
-    await project.save();
+  // Enqueue analysis job so it runs in a managed queue
+  const job = await enqueueAnalysis(project._id.toString(), req.user._id.toString());
 
-    // Analizar cada dataset con Gemini
-    const analysisResults: GeminiAnalysisResult[] = [];
-    for (const dataset of project.datasets) {
-      const analysis = await geminiService.analyzeDataset(dataset);
-      analysisResults.push(analysis);
-    }
+  recordAuditEvent({
+    userId: req.user._id.toString(),
+    action: 'project.analyze.queued',
+    resourceType: 'project',
+    resourceId: project._id.toString(),
+    metadata: { jobId: job._id.toString() },
+    req,
+  });
 
-    // Generar documentación del proyecto
-    const documentation = await geminiService.generateDocumentation(
-      project.datasets,
-      project.name,
-      project.description
-    );
+  // Mark project status to analyzing so UI reflects queued work
+  project.status = ProjectStatus.ANALYZING;
+  await project.save();
 
-    // Actualizar proyecto con resultados
-    // Límite alto para soportar documentación HTML completa
-    const maxDocLength = 150000;
-    project.documentation = documentation.length > maxDocLength
-      ? documentation.substring(0, maxDocLength) + '\n</div></body></html>'
-      : documentation;
-    
-    project.status = ProjectStatus.READY;
-    
-    // Crear dashboard básico basado en las recomendaciones
-    console.log('📈 Generando dashboard...');
-    
-    if (analysisResults.length > 0) {
-      const firstAnalysis = analysisResults[0];
-      const validVisualizations = firstAnalysis.visualizations || [];
-      
-      console.log(`📉 Visualizaciones disponibles: ${validVisualizations.length}`);
-      
-      // Asegurar que siempre tengamos al menos 3 widgets
-      const dashboardWidgets: Widget[] = [];
-      
-      // Añadir visualizaciones reales
-      const VALID_CHART_TYPES = ['bar', 'line', 'pie', 'scatter', 'area'] as const;
-      type ValidChartType = typeof VALID_CHART_TYPES[number];
-      const sanitizeChartType = (t: string | undefined): ValidChartType =>
-        VALID_CHART_TYPES.includes(t as ValidChartType) ? (t as ValidChartType) : 'bar';
-
-      validVisualizations.forEach((viz, index) => {
-        const firstColumn = project.datasets[0]?.metadata?.columns?.[0]?.name || 'categoria';
-        const secondColumn = project.datasets[0]?.metadata?.columns?.[1]?.name || 'valor';
-        
-        dashboardWidgets.push({
-          id: `widget-${index}`,
-          type: 'chart' as const,
-          title: viz.title || `Gráfico ${index + 1}`,
-          description: viz.description || 'Visualización de datos',
-          config: {
-            chartType: sanitizeChartType(viz.chartType),
-            dataSource: project.datasets[0]._id.toString(),
-            xAxis: viz.dataColumns?.[0] || firstColumn,
-            yAxis: viz.dataColumns?.[1] || secondColumn,
-            colors: ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6']
-          },
-          position: {
-            x: (index % 2) * 6,
-            y: Math.floor(index / 2) * 4,
-            width: 6,
-            height: 4
-          }
-        });
-      });
-      
-      // Si no hay suficientes widgets, añadir algunos por defecto
-      if (dashboardWidgets.length < 2) {
-        const defaultWidgets = [
-          {
-            id: 'widget-default-1',
-            type: 'chart' as const,
-            title: 'Vista General',
-            description: 'Resumen de los datos principales',
-            config: {
-              chartType: 'bar' as const,
-              dataSource: project.datasets[0]._id.toString(),
-              xAxis: project.datasets[0]?.metadata?.columns?.[0]?.name || 'categoria',
-              yAxis: project.datasets[0]?.metadata?.columns?.[1]?.name || 'valor',
-              colors: ['#3B82F6', '#10B981', '#F59E0B']
-            },
-            position: { x: 0, y: 0, width: 6, height: 4 }
-          },
-          {
-            id: 'widget-default-2',
-            type: 'chart' as const,
-            title: 'Tendencias',
-            description: 'Patrones en los datos',
-            config: {
-              chartType: 'line' as const,
-              dataSource: project.datasets[0]._id.toString(),
-              xAxis: project.datasets[0]?.metadata?.columns?.[0]?.name || 'tiempo',
-              yAxis: project.datasets[0]?.metadata?.columns?.[1]?.name || 'valor',
-              colors: ['#EF4444', '#8B5CF6']
-            },
-            position: { x: 6, y: 0, width: 6, height: 4 }
-          }
-        ];
-        
-        // Añadir widgets por defecto hasta tener al menos 2
-        defaultWidgets.forEach((widget, idx) => {
-          if (dashboardWidgets.length < 2) {
-            dashboardWidgets.push(widget);
-          }
-        });
-      }
-      
-      project.dashboard = {
-        title: `Dashboard - ${project.name}`,
-        description: firstAnalysis.summary || `Dashboard interactivo para ${project.name}`,
-        widgets: dashboardWidgets,
-        layout: {
-          columns: 12,
-          rowHeight: 150,
-          margin: [10, 10]
-        },
-        generatedAt: new Date()
-      } as any;
-      
-      console.log(`✅ Dashboard generado con ${dashboardWidgets.length} widgets`);
-      console.log('🚀 Widgets generados:', dashboardWidgets.map(w => ({ id: w.id, type: w.type, title: w.title })));
-    } else {
-      console.log('⚠️ No se encontraron resultados de análisis, generando dashboard básico...');
-      
-      // Dashboard de respaldo
-      project.dashboard = {
-        title: `Dashboard - ${project.name}`,
-        description: `Dashboard básico para el proyecto ${project.name}`,
-        widgets: [
-          {
-            id: 'fallback-widget-1',
-            type: 'chart',
-            title: 'Resumen de Datos',
-            description: 'Vista general de la información disponible',
-            config: {
-              chartType: 'bar',
-              dataSource: project.datasets[0]._id.toString(),
-              xAxis: 'categoria',
-              yAxis: 'valor',
-              colors: ['#3B82F6']
-            },
-            position: { x: 0, y: 0, width: 12, height: 6 }
-          }
-        ],
-        layout: {
-          columns: 12,
-          rowHeight: 150,
-          margin: [10, 10]
-        },
-        generatedAt: new Date()
-      } as any;
-    }
-
-    await project.save();
-    console.log('📊 Dashboard guardado en MongoDB:', {
-      projectId: project._id,
-      dashboardTitle: project.dashboard?.title,
-      widgetCount: project.dashboard?.widgets?.length || 0,
-      hasLayout: !!project.dashboard?.layout
-    });
-
-    res.json({
-      success: true,
-      data: {
-        project,
-        analysis: analysisResults
-      },
-      message: 'Análisis completado exitosamente'
-    });
-
-  } catch (error) {
-    // Cambiar estado a error si falla
-    project.status = ProjectStatus.ERROR;
-    await project.save();
-    throw error;
-  }
+  res.status(202).json({
+    success: true,
+    data: { jobId: job._id.toString() },
+    message: 'Análisis encolado. Usa el jobId para consultar estado.'
+  });
 }));
 
 /**
@@ -431,15 +443,14 @@ router.get('/:id/dashboard', asyncHandler(async (req: express.Request, res: expr
     throw createError('Usuario no autenticado', 401);
   }
 
-  const project = await Project.findOne({
-    _id: req.params.id,
-    userId: req.user._id
-  });
+  const project = await Project.findById(req.params.id);
 
   if (!project) {
     console.log('⚠️ Proyecto no encontrado para dashboard:', req.params.id);
     throw createError('Proyecto no encontrado', 404);
   }
+
+  getProjectAccess(project, req.user._id.toString(), 'viewer', getShareTokenFromRequest(req));
 
   if (!project.dashboard) {
     console.log('⚠️ Dashboard no encontrado para proyecto:', req.params.id);
@@ -478,14 +489,13 @@ router.get('/:id/documentation', asyncHandler(async (req: express.Request, res: 
     throw createError('Usuario no autenticado', 401);
   }
 
-  const project = await Project.findOne({
-    _id: req.params.id,
-    userId: req.user._id
-  });
+  const project = await Project.findById(req.params.id);
 
   if (!project) {
     throw createError('Proyecto no encontrado', 404);
   }
+
+  getProjectAccess(project, req.user._id.toString(), 'viewer', getShareTokenFromRequest(req));
 
   res.json({
     success: true,
@@ -493,6 +503,61 @@ router.get('/:id/documentation', asyncHandler(async (req: express.Request, res: 
       documentation: project.documentation || 'No hay documentación disponible',
       isHtml: project.documentation?.startsWith('<!DOCTYPE html>') || false,
       generatedAt: project.updatedAt
+    }
+  });
+}));
+
+/**
+ * @route   GET /api/projects/:id/reliability
+ * @desc    Obtener métricas de confiabilidad técnica del proyecto
+ * @access  Private
+ */
+router.get('/:id/reliability', asyncHandler(async (req: express.Request, res: express.Response<ApiResponse>) => {
+  if (!req.user) {
+    throw createError('Usuario no autenticado', 401);
+  }
+
+  const project = await Project.findById(req.params.id);
+  if (!project) {
+    throw createError('Proyecto no encontrado', 404);
+  }
+
+  getProjectAccess(project, req.user._id.toString(), 'viewer', getShareTokenFromRequest(req));
+
+  const stats = project.getStats();
+  const alertSnapshot = syncReliabilityAlerts(project, calculateReliabilityScore(project));
+  if (alertSnapshot.changed) {
+    await project.save();
+  }
+
+  const datasetsSummary = (project.datasets || []).map((ds: any) => ({
+    id: ds._id,
+    originalName: ds.originalName,
+    rowCount: ds.metadata?.rowCount || 0,
+    columnsCount: (ds.metadata?.columns || []).length,
+    nullableColumns: (ds.metadata?.columns || []).filter((c: any) => !!c.nullable).length,
+    uploadedAt: ds.uploadedAt,
+  }));
+
+  const reliabilityScore = alertSnapshot.score;
+
+  const recommendedActions: string[] = [];
+  if (!stats.totalDatasets) recommendedActions.push('Sube al menos un dataset para generar análisis');
+  if (datasetsSummary.some((d: any) => d.rowCount === 0)) recommendedActions.push('Verifica que los datasets contengan filas válidas');
+  if (!stats.hasDocumentation) recommendedActions.push('Genera la documentación del proyecto');
+  if (!stats.hasDashboard) recommendedActions.push('Genera el dashboard con IA');
+
+  res.json({
+    success: true,
+    data: {
+      stats,
+      datasets: datasetsSummary,
+      reliabilityScore,
+      alerts: alertSnapshot.alerts,
+      activeAlerts: alertSnapshot.activeAlerts,
+      recommendedActions,
+      lastUpdated: project.updatedAt,
+      status: project.status
     }
   });
 }));
@@ -507,21 +572,25 @@ router.post('/:id/generate-widget', asyncHandler(async (req: express.Request, re
     throw createError('Usuario no autenticado', 401);
   }
 
-  const project = await Project.findOne({
-    _id: req.params.id,
-    userId: req.user._id
-  });
+  const project = await Project.findById(req.params.id);
 
   if (!project) {
     throw createError('Proyecto no encontrado', 404);
   }
 
+  getProjectAccess(project, req.user._id.toString(), 'editor', getShareTokenFromRequest(req));
+
   if (!project.datasets || project.datasets.length === 0) {
     throw createError('El proyecto no tiene datasets. Sube un archivo primero.', 400);
   }
 
-  const { prompt } = req.body;
-  if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
+  const { error, value } = generateWidgetSchema.validate(req.body);
+  if (error) {
+    throw createError(error.details[0].message, 400);
+  }
+
+  const prompt = sanitizeTextInput(value.prompt, { maxLength: 1000, allowNewlines: true });
+  if (!prompt) {
     throw createError('El prompt no puede estar vacío', 400);
   }
 
@@ -530,7 +599,7 @@ router.post('/:id/generate-widget', asyncHandler(async (req: express.Request, re
   const existingTitles = (project.dashboard?.widgets || []).map((w: any) => w.title);
 
   const widgetConfig = await geminiService.generateCustomWidget(
-    prompt.trim(),
+    prompt,
     columns,
     dataset.originalName,
     existingTitles
@@ -630,15 +699,28 @@ router.post('/:id/chat', asyncHandler(async (req: express.Request, res: express.
     throw createError('Proyecto no encontrado', 404);
   }
 
-  const { message, widgetContext, conversationHistory = [] } = req.body;
+  const { error, value } = chatSchema.validate(req.body);
+  if (error) {
+    throw createError(error.details[0].message, 400);
+  }
 
-  if (!message || typeof message !== 'string' || message.trim().length === 0) {
+  const message = sanitizeTextInput(value.message, { maxLength: 1000, allowNewlines: true });
+  if (!message) {
     throw createError('El mensaje no puede estar vacío', 400);
   }
 
-  if (!widgetContext) {
-    throw createError('Contexto del widget requerido', 400);
-  }
+  const widgetContext = {
+    ...value.widgetContext,
+    widgetTitle: sanitizeTextInput(value.widgetContext.widgetTitle, { maxLength: 200 }),
+    widgetDescription: sanitizeTextInput(value.widgetContext.widgetDescription || '', { maxLength: 1000, allowNewlines: true }),
+    xKey: sanitizeTextInput(value.widgetContext.xKey, { maxLength: 100 }),
+    yKey: sanitizeTextInput(value.widgetContext.yKey, { maxLength: 100 }),
+  };
+
+  const conversationHistory = value.conversationHistory.map((entry) => ({
+    ...entry,
+    text: sanitizeTextInput(entry.text, { maxLength: 1000, allowNewlines: true }),
+  }));
 
   const reply = await geminiService.chatAboutWidget(message.trim(), {
     projectName: project.name,

@@ -3,28 +3,53 @@ import multer from 'multer';
 import { Readable } from 'stream';
 import csv from 'csv-parser';
 import * as XLSX from 'xlsx';
+import path from 'path';
+import Joi from 'joi';
 import { authenticate } from '../middleware/auth';
 import { asyncHandler, createError } from '../middleware/errorHandler';
 import { Project } from '../models/Project';
 import { ApiResponse, Dataset, ColumnInfo, DatasetMetadata } from '../types';
+import { recordAuditEvent } from '../services/auditService';
+import { isPlainObject, sanitizeFilename, validateDatasetRows, MAX_UPLOAD_ROWS } from '../utils/validation';
+import { uploadLimiter } from '../middleware/rateLimiters';
+import { getProjectAccess, getShareTokenFromRequest } from '../middleware/projectAccess';
+import { syncReliabilityAlerts } from '../services/projectAlertService';
 
 const router = express.Router();
 
 // Almacenar archivo en RAM, nunca en disco
 const storage = multer.memoryStorage();
 
-const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
-  const allowedTypes = [
-    'text/csv',
-    'application/json',
-    'application/vnd.ms-excel',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-  ];
+const allowedFileTypes = [
+  { mimetype: 'text/csv', extensions: ['.csv'] },
+  { mimetype: 'application/json', extensions: ['.json'] },
+  { mimetype: 'application/vnd.ms-excel', extensions: ['.xls'] },
+  { mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', extensions: ['.xlsx'] },
+];
 
-  if (allowedTypes.includes(file.mimetype)) {
+const uploadParamsSchema = Joi.object({
+  projectId: Joi.string().pattern(/^[a-fA-F0-9]{24}$/).required().messages({
+    'string.pattern.base': 'ID de proyecto inválido',
+    'any.required': 'ID de proyecto requerido'
+  })
+}).options({ abortEarly: false, stripUnknown: true, convert: true });
+
+const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+  const normalizedName = sanitizeFilename(file.originalname);
+  const extension = path.extname(normalizedName).toLowerCase();
+  const isAllowed = allowedFileTypes.some(({ mimetype, extensions }) =>
+    mimetype === file.mimetype && extensions.includes(extension)
+  );
+
+  if (normalizedName.length === 0) {
+    cb(createError('Nombre de archivo inválido', 400) as unknown as Error);
+    return;
+  }
+
+  if (isAllowed) {
     cb(null, true);
   } else {
-    cb(new Error('Solo se permiten archivos CSV, JSON y Excel'));
+    cb(createError('Solo se permiten archivos CSV, JSON y Excel con extensión válida', 400) as unknown as Error);
   }
 };
 
@@ -44,9 +69,14 @@ router.use(authenticate);
  * @desc    Subir archivo de datos a un proyecto
  * @access  Private
  */
-router.post('/:projectId', upload.single('file'), asyncHandler(async (req: express.Request, res: express.Response<ApiResponse>) => {
+router.post('/:projectId', uploadLimiter, upload.single('file'), asyncHandler(async (req: express.Request, res: express.Response<ApiResponse>) => {
   if (!req.user) {
     throw createError('Usuario no autenticado', 401);
+  }
+
+  const { error: paramError, value: params } = uploadParamsSchema.validate(req.params);
+  if (paramError) {
+    throw createError(paramError.details[0].message, 400);
   }
 
   if (!req.file) {
@@ -54,23 +84,23 @@ router.post('/:projectId', upload.single('file'), asyncHandler(async (req: expre
   }
 
   // Verificar que el proyecto existe y pertenece al usuario
-  const project = await Project.findOne({
-    _id: req.params.projectId,
-    userId: req.user._id
-  });
+  const project = await Project.findById(params.projectId);
 
   if (!project) {
     throw createError('Proyecto no encontrado', 404);
   }
 
+  getProjectAccess(project, req.user._id.toString(), 'editor', getShareTokenFromRequest(req));
+
   // Procesar el archivo en memoria — nunca se guarda en disco
   const data = await processFile(req.file);
   const metadata = generateMetadata(data);
+  const safeFilename = sanitizeFilename(req.file.originalname);
 
   // Crear dataset
   const dataset: Omit<Dataset, '_id'> = {
-    filename: req.file.originalname,
-    originalName: req.file.originalname,
+    filename: safeFilename,
+    originalName: safeFilename,
     mimetype: req.file.mimetype,
     size: req.file.size,
     data: data.slice(0, 1000), // Limitar a 1000 registros para almacenamiento
@@ -80,7 +110,17 @@ router.post('/:projectId', upload.single('file'), asyncHandler(async (req: expre
 
   // Agregar dataset al proyecto
   project.datasets.push(dataset as any);
+  syncReliabilityAlerts(project);
   await project.save();
+
+  recordAuditEvent({
+    userId: req.user._id.toString(),
+    action: 'dataset.upload',
+    resourceType: 'project',
+    resourceId: project._id.toString(),
+      metadata: { filename: safeFilename, size: req.file.size },
+    req,
+  });
 
   res.json({
     success: true,
@@ -194,6 +234,15 @@ router.delete('/:projectId/datasets/:datasetId', asyncHandler(async (req: expres
   project.datasets.splice(datasetIndex, 1);
   await project.save();
 
+  recordAuditEvent({
+    userId: req.user._id.toString(),
+    action: 'dataset.delete',
+    resourceType: 'project',
+    resourceId: project._id.toString(),
+    metadata: { datasetId: req.params.datasetId },
+    req,
+  });
+
   res.json({
     success: true,
     message: 'Dataset eliminado exitosamente'
@@ -234,11 +283,45 @@ async function processFile(file: Express.Multer.File): Promise<any[]> {
 function processCSV(buffer: Buffer): Promise<any[]> {
   return new Promise((resolve, reject) => {
     const results: any[] = [];
-    Readable.from(buffer)
-      .pipe(csv())
-      .on('data', (data) => results.push(data))
-      .on('end', () => resolve(results))
-      .on('error', reject);
+    let settled = false;
+    const parser = csv();
+
+    const fail = (error: Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(error);
+    };
+
+    parser.on('data', (data) => {
+      if (settled) {
+        return;
+      }
+
+      results.push(data);
+
+      if (results.length > MAX_UPLOAD_ROWS) {
+        parser.destroy(new Error(`El archivo excede el máximo de ${MAX_UPLOAD_ROWS} filas permitidas`));
+        return;
+      }
+
+      try {
+        validateDatasetRows([data]);
+      } catch (validationError) {
+        parser.destroy(validationError as Error);
+      }
+    });
+
+    parser.on('error', (error) => fail(error));
+    parser.on('end', () => {
+      if (!settled) {
+        settled = true;
+        resolve(results);
+      }
+    });
+
+    Readable.from(buffer).pipe(parser);
   });
 }
 
@@ -246,13 +329,21 @@ function processCSV(buffer: Buffer): Promise<any[]> {
  * Procesa JSON desde buffer
  */
 async function processJSON(buffer: Buffer): Promise<any[]> {
-  const jsonData = JSON.parse(buffer.toString('utf8'));
+  let jsonData: unknown;
+
+  try {
+    jsonData = JSON.parse(buffer.toString('utf8'));
+  } catch (error) {
+    throw new Error('JSON inválido');
+  }
 
   if (Array.isArray(jsonData)) {
+    validateDatasetRows(jsonData);
     return jsonData;
   }
 
-  if (typeof jsonData === 'object') {
+  if (isPlainObject(jsonData)) {
+    validateDatasetRows([jsonData]);
     return [jsonData];
   }
 
@@ -267,7 +358,9 @@ async function processExcel(buffer: Buffer): Promise<any[]> {
   const sheetName = workbook.SheetNames[0];
   const worksheet = workbook.Sheets[sheetName];
 
-  return XLSX.utils.sheet_to_json(worksheet);
+  const rows = XLSX.utils.sheet_to_json(worksheet);
+  validateDatasetRows(rows);
+  return rows;
 }
 
 /**
@@ -287,6 +380,10 @@ function generateMetadata(data: any[]): DatasetMetadata {
   const firstRow = data[0];
   const columns: ColumnInfo[] = [];
   const dataTypes: Record<string, string> = {};
+
+  if (!isPlainObject(firstRow)) {
+    throw new Error('El dataset debe contener objetos válidos');
+  }
 
   // Analizar cada columna
   Object.keys(firstRow).forEach(columnName => {

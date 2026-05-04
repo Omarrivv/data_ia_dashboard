@@ -43,11 +43,11 @@ npm run install:all
 # Backend (.env)
 MONGODB_URI=mongodb://localhost:27017/dashboard-platform
 JWT_SECRET=tu-jwt-secret-super-seguro
-GEMINI_API_KEY=AIzaSyAoF1cm2X9C5bOrqEZuIT2tZVN6-cV5aAI
+GEMINI_API_KEY=TU-API-KEY
 PORT=5000
 
 # Frontend (.env.local)
-NEXT_PUBLIC_API_URL=http://localhost:5000/api
+NEXT_PUBLIC_API_URL=http://localhost:5001/api
 ```
 
 3. **Ejecutar en desarrollo:**
@@ -57,7 +57,7 @@ npm run dev
 
 4. **Acceder a la aplicación:**
 - Frontend: http://localhost:3000
-- Backend API: http://localhost:5000
+- Backend API: http://localhost:5001
 
 ## 📱 Flujo de Usuario
 
@@ -158,4 +158,4 @@ MIT License - ver archivo [LICENSE](LICENSE) para detalles.
 
 ---
 
-**Desarrollado con ❤️ usando IA Gemini y tecnologías modernas**
+**Desarrollado por Omar Rivera usando IA Gemini y tecnologías modernas**

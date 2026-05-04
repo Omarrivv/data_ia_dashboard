@@ -8,15 +8,21 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
-import rateLimit from 'express-rate-limit';
 import path from 'path';
 
 import { connectDB } from './config/database';
 import { errorHandler } from './middleware/errorHandler';
 import authRoutes from './routes/auth';
+import adminRoutes from './routes/admin';
 import projectRoutes from './routes/projects';
+import jobsRoutes from './routes/jobs';
 import dashboardRoutes from './routes/dashboards';
 import uploadRoutes from './routes/upload';
+import observabilityRoutes from './routes/observability';
+import requestIdMiddleware from './middleware/requestId';
+import { expressLoggerMiddleware, logger } from './middleware/logger';
+import { recordRequest } from './services/metricsService';
+import { authLimiter, readLimiter, analysisLimiter, uploadLimiter, adminLimiter, globalLimiter } from './middleware/rateLimiters';
 
 // Cargar variables de entorno
 // dotenv.config(); // Ya se cargó al inicio
@@ -37,17 +43,33 @@ app.use(cors({
   credentials: true
 }));
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'), // 15 minutos
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100'), // 100 requests por ventana
-  message: {
-    error: 'Demasiadas solicitudes desde esta IP, intenta de nuevo más tarde.'
-  }
-});
-app.use('/api/', limiter);
+// Rate limiting (granular por tipo de endpoint)
+// Global fallback
+app.use('/api/', globalLimiter);
 
-// Logging
+// Auth: muy estricto
+app.use('/api/auth', authLimiter);
+
+// Admin: muy estricto
+app.use('/api/admin', adminLimiter);
+
+// Analysis endpoints: moderados
+app.use('/api/projects/:id/analyze', analysisLimiter);
+
+// Upload: moderados
+app.use('/api/upload', uploadLimiter);
+
+// Read endpoints: flexibles (GET requests)
+app.get('/api/dashboards', readLimiter);
+app.get('/api/projects', readLimiter);
+app.get('/api/jobs', readLimiter);
+
+
+// Request id & structured logger middleware
+app.use(requestIdMiddleware);
+app.use(expressLoggerMiddleware);
+
+// Logging (morgan kept for compatibility)
 if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 } else {
@@ -57,6 +79,26 @@ if (process.env.NODE_ENV === 'development') {
 // Body parsing
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Metrics: measure response time and record
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const status = res.statusCode || 0;
+    try {
+      recordRequest(req.originalUrl, req.method, status, duration);
+    } catch (e) {
+      logger.warn('Error recording metrics', { err: e instanceof Error ? e.message : String(e) });
+    }
+    try {
+      (req as any).log?.info('request_end', { status, duration });
+    } catch (e) {
+      // ignore
+    }
+  });
+  next();
+});
 
 // Servir archivos estáticos
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
@@ -73,9 +115,12 @@ app.get('/health', (req, res) => {
 
 // Rutas de la API
 app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
 app.use('/api/projects', projectRoutes);
+app.use('/api/jobs', jobsRoutes);
 app.use('/api/dashboards', dashboardRoutes);
 app.use('/api/upload', uploadRoutes);
+app.use('/api/observability', observabilityRoutes);
 
 // Ruta de bienvenida
 app.get('/api', (req, res) => {
@@ -106,11 +151,13 @@ app.use(errorHandler);
 
 // Iniciar servidor
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor ejecutándose en puerto ${PORT}`);
-  console.log(`📊 Dashboard Platform API v1.0.0`);
-  console.log(`🌍 Entorno: ${process.env.NODE_ENV}`);
-  console.log(`🔗 Health check: http://localhost:${PORT}/health`);
+  logger.info('server_start', { port: PORT, env: process.env.NODE_ENV });
+  logger.info('health_check', { url: `http://localhost:${PORT}/health` });
 });
+
+// Start background job worker
+import { startWorker } from './services/jobQueueService';
+startWorker();
 
 // Manejo de errores no capturados
 process.on('unhandledRejection', (err: Error) => {

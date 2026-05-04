@@ -17,23 +17,46 @@ interface JwtPayload {
   email: string;
 }
 
+const AUTH_COOKIE_NAME = 'auth_token';
+
+const getCookieValue = (cookieHeader: string | undefined, key: string): string | null => {
+  if (!cookieHeader) return null;
+
+  const parts = cookieHeader.split(';');
+  for (const part of parts) {
+    const [rawName, ...rawValue] = part.trim().split('=');
+    if (rawName === key) {
+      return decodeURIComponent(rawValue.join('='));
+    }
+  }
+
+  return null;
+};
+
+const extractToken = (req: Request): string | null => {
+  const authHeader = req.header('Authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    return authHeader.substring(7);
+  }
+
+  return getCookieValue(req.headers.cookie, AUTH_COOKIE_NAME);
+};
+
 export const authenticate = async (
   req: Request,
   res: Response<ApiResponse>,
   next: NextFunction
 ): Promise<void> => {
   try {
-    const authHeader = req.header('Authorization');
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    const token = extractToken(req);
+
+    if (!token) {
       res.status(401).json({
         success: false,
         message: 'Token de acceso requerido'
       });
       return;
     }
-
-    const token = authHeader.substring(7); // Remover 'Bearer '
     
     if (!process.env.JWT_SECRET) {
       throw new Error('JWT_SECRET no configurado');
@@ -84,14 +107,12 @@ export const optionalAuth = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    const authHeader = req.header('Authorization');
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    const token = extractToken(req);
+
+    if (!token) {
       next();
       return;
     }
-
-    const token = authHeader.substring(7);
     
     if (!process.env.JWT_SECRET) {
       next();

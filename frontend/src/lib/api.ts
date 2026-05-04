@@ -2,6 +2,8 @@ import axios, { AxiosResponse } from 'axios';
 import { 
   ApiResponse, 
   AuthResponse, 
+  AuditLogEntry,
+  AuditSummary,
   LoginRequest, 
   RegisterRequest,
   Project,
@@ -13,36 +15,19 @@ import {
 
 // Create axios instance
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api',
+  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api',
   timeout: 8000, // 8s — evita bloquear la UI si el backend no responde
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
 });
-
-// Request interceptor to add auth token
-api.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('auth_token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
-  },
-  (error) => {
-    return Promise.reject(error);
-  }
-);
 
 // Response interceptor to handle auth errors
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Token expired or invalid
-      localStorage.removeItem('auth_token');
-      localStorage.removeItem('auth_user');
-      
       // Redirect to login if not already there
       if (typeof window !== 'undefined' && !window.location.pathname.includes('/auth/')) {
         window.location.href = '/auth/login';
@@ -59,6 +44,9 @@ export const authApi = {
   
   register: (data: RegisterRequest): Promise<AxiosResponse<ApiResponse<AuthResponse>>> =>
     api.post('/auth/register', data),
+
+  logout: (): Promise<AxiosResponse<ApiResponse<any>>> =>
+    api.post('/auth/logout'),
   
   getProfile: (): Promise<AxiosResponse<ApiResponse<any>>> =>
     api.get('/auth/me'),
@@ -68,6 +56,19 @@ export const authApi = {
   
   changePassword: (data: { currentPassword: string; newPassword: string }): Promise<AxiosResponse<ApiResponse<any>>> =>
     api.post('/auth/change-password', data),
+};
+
+export const adminApi = {
+  getAuditLogs: (params?: {
+    page?: number;
+    limit?: number;
+    action?: string;
+    resourceType?: string;
+  }): Promise<AxiosResponse<ApiResponse<{ entries: AuditLogEntry[]; pagination: { page: number; limit: number; total: number; pages: number } }>>> =>
+    api.get('/admin/audit-logs', { params }),
+
+  getAuditSummary: (): Promise<AxiosResponse<ApiResponse<AuditSummary>>> =>
+    api.get('/admin/summary'),
 };
 
 // Projects API
@@ -80,8 +81,14 @@ export const projectsApi = {
   }): Promise<AxiosResponse<ApiResponse<any>>> =>
     api.get('/projects', { params }),
   
-  getProject: (id: string): Promise<AxiosResponse<ApiResponse<Project>>> =>
-    api.get(`/projects/${id}`),
+  getProject: (id: string, shareToken?: string): Promise<AxiosResponse<ApiResponse<Project>>> =>
+    api.get(`/projects/${id}`, { params: shareToken ? { shareToken } : undefined }),
+
+  getProjectShare: (id: string): Promise<AxiosResponse<ApiResponse<any>>> =>
+    api.get(`/projects/${id}/share`),
+
+  updateProjectShare: (id: string, data: { enabled: boolean; permission: 'viewer' | 'editor'; regenerateToken?: boolean }): Promise<AxiosResponse<ApiResponse<any>>> =>
+    api.put(`/projects/${id}/share`, data),
   
   createProject: (data: CreateProjectRequest): Promise<AxiosResponse<ApiResponse<Project>>> =>
     api.post('/projects', data),
@@ -92,8 +99,8 @@ export const projectsApi = {
   deleteProject: (id: string): Promise<AxiosResponse<ApiResponse<any>>> =>
     api.delete(`/projects/${id}`),
   
-  analyzeProject: (id: string): Promise<AxiosResponse<ApiResponse<any>>> =>
-    api.post(`/projects/${id}/analyze`, {}, { timeout: 120000 }), // 2 min — Gemini + dashboard generation
+  analyzeProject: (id: string, shareToken?: string): Promise<AxiosResponse<ApiResponse<any>>> =>
+    api.post(`/projects/${id}/analyze`, {}, { timeout: 120000, params: shareToken ? { shareToken } : undefined }), // 2 min — Gemini + dashboard generation
 
   chatWidget: (
     id: string,
@@ -107,19 +114,22 @@ export const projectsApi = {
   ): Promise<AxiosResponse<ApiResponse<{ reply: string }>>> =>
     api.post(`/projects/${id}/chat-general`, data, { timeout: 30000 }),
 
-  getDashboard: (id: string): Promise<AxiosResponse<ApiResponse<any>>> =>
-    api.get(`/projects/${id}/dashboard`),
+  getDashboard: (id: string, shareToken?: string): Promise<AxiosResponse<ApiResponse<any>>> =>
+    api.get(`/projects/${id}/dashboard`, { params: shareToken ? { shareToken } : undefined }),
   
-  getDocumentation: (id: string): Promise<AxiosResponse<ApiResponse<any>>> =>
-    api.get(`/projects/${id}/documentation`),
+  getDocumentation: (id: string, shareToken?: string): Promise<AxiosResponse<ApiResponse<any>>> =>
+    api.get(`/projects/${id}/documentation`, { params: shareToken ? { shareToken } : undefined }),
 
-  generateCustomWidget: (id: string, prompt: string): Promise<AxiosResponse<ApiResponse<any>>> =>
-    api.post(`/projects/${id}/generate-widget`, { prompt }, { timeout: 60000 }),
+  getReliability: (id: string, shareToken?: string): Promise<AxiosResponse<ApiResponse<any>>> =>
+    api.get(`/projects/${id}/reliability`, { params: shareToken ? { shareToken } : undefined }),
+
+  generateCustomWidget: (id: string, prompt: string, shareToken?: string): Promise<AxiosResponse<ApiResponse<any>>> =>
+    api.post(`/projects/${id}/generate-widget`, { prompt }, { timeout: 60000, params: shareToken ? { shareToken } : undefined }),
 };
 
 // Upload API
 export const uploadApi = {
-  uploadFile: (projectId: string, file: File, onProgress?: (progress: number) => void): Promise<AxiosResponse<ApiResponse<any>>> => {
+  uploadFile: (projectId: string, file: File, onProgress?: (progress: number) => void, shareToken?: string): Promise<AxiosResponse<ApiResponse<any>>> => {
     const formData = new FormData();
     formData.append('file', file);
     
@@ -127,6 +137,7 @@ export const uploadApi = {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      params: shareToken ? { shareToken } : undefined,
       onUploadProgress: (progressEvent) => {
         if (onProgress && progressEvent.total) {
           const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
@@ -168,6 +179,10 @@ export const dashboardApi = {
   
   getVisualizationData: (projectId: string, datasetId: string, params?: any): Promise<AxiosResponse<ApiResponse<any>>> =>
     api.get(`/dashboards/${projectId}/data/${datasetId}`, { params }),
+};
+
+export const jobsApi = {
+  getJob: (id: string) => api.get(`/jobs/${id}`),
 };
 
 export default api;

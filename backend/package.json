@@ -7,7 +7,7 @@
     "dev": "nodemon src/dev.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "jest",
+    "test": "node --test -r ts-node/register tests",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix"
   },

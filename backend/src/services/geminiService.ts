@@ -1,5 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { GeminiAnalysisResult, VisualizationRecommendation, Dataset } from '../types';
+import crypto from 'crypto';
+import { GeminiRequestCache } from '../models/GeminiRequestCache';
 
 class GeminiService {
   private genAI: GoogleGenerativeAI;
@@ -44,10 +46,8 @@ class GeminiService {
 
       const prompt = this.createAnalysisPrompt(dataset);
       console.log('📝 Enviando prompt a Gemini 2.5 Flash-Lite (modelo gratuito)...');
-      
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
+
+      const text = await this.requestWithRetries(prompt);
       
       console.log('✅ Respuesta recibida de Gemini, procesando...');
       const parsedResult = this.parseAnalysisResponse(text);
@@ -92,10 +92,8 @@ class GeminiService {
 
       const prompt = this.createDocumentationPrompt(datasets, projectName, projectDescription);
       console.log('📝 Enviando prompt de documentación a Gemini...');
-      
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      let documentation = response.text();
+
+      let documentation = await this.requestWithRetries(prompt);
 
       // Limpiar bloques de código Markdown que Gemini a veces añade (```html ... ```)
       documentation = documentation
@@ -128,15 +126,68 @@ class GeminiService {
   async recommendVisualizations(dataset: Dataset): Promise<VisualizationRecommendation[]> {
     try {
       const prompt = this.createVisualizationPrompt(dataset);
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
-      
+      const text = await this.requestWithRetries(prompt);
       return this.parseVisualizationRecommendations(text);
     } catch (error) {
       console.error('Error recomendando visualizaciones con Gemini:', error);
       throw new Error('Error al recomendar visualizaciones con IA');
     }
+  }
+
+  /**
+   * Perform request to Gemini with idempotency caching and retries.
+   * If an idempotencyKey is provided, the cached response will be used.
+   */
+  private async requestWithRetries(prompt: string, idempotencyKey?: string): Promise<string> {
+    const key = idempotencyKey || crypto.createHash('sha256').update(prompt).digest('hex');
+
+    // Check cache first
+    try {
+      const cached = await GeminiRequestCache.findOne({ key }).lean();
+      if (cached) {
+        console.log('🔁 Reusing cached Gemini response for key', key.slice(0, 8));
+        return cached.responseText;
+      }
+    } catch (e) {
+      console.warn('⚠️ Error consultando cache de Gemini:', e instanceof Error ? e.message : String(e));
+    }
+
+    const maxRetries = parseInt(process.env.GEMINI_MAX_RETRIES || '3', 10);
+    const baseDelay = parseInt(process.env.GEMINI_RETRY_BASE_MS || '500', 10);
+
+    let lastErr: any = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const result = await this.model.generateContent(prompt);
+        const response = await result.response;
+        const text = response.text();
+
+        // Save to cache (best-effort)
+        try {
+          await GeminiRequestCache.create({ key, responseText: text });
+        } catch (e) {
+          // ignore cache write errors
+        }
+
+        return text;
+      } catch (err: any) {
+        lastErr = err;
+        const isQuota = err instanceof Error && err.message && err.message.toLowerCase().includes('quota');
+        const isTransient = !isQuota; // treat non-quota as transient for retry purposes
+
+        if (attempt >= maxRetries || isQuota) {
+          // Do not retry further on quota errors or after max attempts
+          console.error(`❌ Gemini request failed (attempt ${attempt}) - ${err?.message || String(err)}`);
+          break;
+        }
+
+        const backoff = baseDelay * Math.pow(2, attempt);
+        console.log(`⏱ Retry Gemini request in ${backoff}ms (attempt ${attempt + 1} of ${maxRetries})`);
+        await new Promise(r => setTimeout(r, backoff));
+      }
+    }
+
+    throw lastErr || new Error('Error desconocido en requestWithRetries');
   }
 
   /**
