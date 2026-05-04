@@ -332,7 +332,7 @@ export default function ProjectDetailPage() {
 
       if (currentStatus === 'ready') {
         toast.success(
-          project?.hasDocumentation
+          project?.stats?.hasDocumentation
             ? 'Dashboard y documentación generados correctamente'
             : 'Dashboard generado correctamente'
         );
@@ -342,7 +342,7 @@ export default function ProjectDetailPage() {
     }
 
     previousStatusRef.current = currentStatus;
-  }, [project?.status, project?.hasDocumentation]);
+  }, [project?.status, project?.stats?.hasDocumentation]);
 
   // Get dashboard data
   const { data: dashboardData } = useQuery({

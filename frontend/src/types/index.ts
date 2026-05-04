@@ -19,6 +19,7 @@ export interface Project {
   access?: 'owner' | 'viewer' | 'editor';
   shareLink?: string;
   status?: string;
+  stats?: ProjectStats;
   datasets: Dataset[];
   dashboard?: Dashboard;
   documentation?: string;
