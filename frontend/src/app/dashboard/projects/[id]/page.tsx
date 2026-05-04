@@ -307,6 +307,16 @@ export default function ProjectDetailPage() {
     return () => window.clearInterval(intervalId);
   }, [project?.status, projectId, queryClient]);
 
+  // Ensure any polling interval is cleared when component unmounts to avoid memory leaks
+  useEffect(() => {
+    return () => {
+      if (analysisPollRef.current) {
+        clearInterval(analysisPollRef.current);
+        analysisPollRef.current = null;
+      }
+    };
+  }, []);
+
   useEffect(() => {
     setIsAnalyzing(project?.status === 'analyzing');
   }, [project?.status]);

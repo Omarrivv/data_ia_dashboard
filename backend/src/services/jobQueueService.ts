@@ -38,11 +38,17 @@ export async function startWorker() {
   // Polling loop
   setInterval(async () => {
     if (activeWorkers >= MAX_CONCURRENCY) return;
-    const job = await claimNextJob();
-    if (!job) return;
-
+    // Reserve a worker slot immediately to avoid race conditions
     activeWorkers++;
-    (async () => {
+    try {
+      const job = await claimNextJob();
+      if (!job) {
+        // No job available, release reserved slot
+        activeWorkers--;
+        return;
+      }
+
+      (async () => {
       const jobId = job._id.toString();
       try {
         await updateJobProgress(jobId, 1, 'Procesando job');
@@ -68,6 +74,11 @@ export async function startWorker() {
         activeWorkers--;
       }
     })();
+    } catch (e) {
+      // Ensure reserved slot is released on unexpected errors
+      if (activeWorkers > 0) activeWorkers--;
+      console.error('Error claiming job or running worker loop', e);
+    }
   }, 1000);
 }
 

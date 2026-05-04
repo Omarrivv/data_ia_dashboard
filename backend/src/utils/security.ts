@@ -1,18 +1,29 @@
+import sanitizeHtml from 'sanitize-html';
+
 export const sanitizeHtmlContent = (content: string): string => {
-  let sanitized = content;
-
-  sanitized = sanitized.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '');
-  sanitized = sanitized.replace(/<iframe[\s\S]*?>[\s\S]*?<\/iframe>/gi, '');
-  sanitized = sanitized.replace(/<object[\s\S]*?>[\s\S]*?<\/object>/gi, '');
-  sanitized = sanitized.replace(/<embed[\s\S]*?>/gi, '');
-  sanitized = sanitized.replace(/<link[\s\S]*?>/gi, '');
-  sanitized = sanitized.replace(/\son\w+\s*=\s*"[^"]*"/gi, '');
-  sanitized = sanitized.replace(/\son\w+\s*=\s*'[^']*'/gi, '');
-  sanitized = sanitized.replace(/\son\w+\s*=\s*[^\s>]+/gi, '');
-  sanitized = sanitized.replace(/(href|src)\s*=\s*"\s*javascript:[^"]*"/gi, '$1="#"');
-  sanitized = sanitized.replace(/(href|src)\s*=\s*'\s*javascript:[^']*'/gi, '$1="#"');
-
-  return sanitized;
+  // Use a well-maintained sanitization library to avoid XSS bypasses
+  return sanitizeHtml(content || '', {
+    allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'h1', 'h2', 'h3', 'pre', 'code']),
+    allowedAttributes: {
+      ...sanitizeHtml.defaults.allowedAttributes,
+      a: ['href', 'name', 'target', 'rel'],
+      img: ['src', 'alt', 'title'],
+    },
+    allowedSchemesByTag: {
+      a: ['http', 'https', 'mailto'],
+      img: ['http', 'https', 'data'],
+    },
+    transformTags: {
+      'a': (tagName, attribs) => {
+        // Neutralize javascript: hrefs
+        if (attribs && attribs.href && attribs.href.trim().toLowerCase().startsWith('javascript:')) {
+          attribs.href = '#';
+        }
+        attribs.rel = 'noopener noreferrer';
+        return { tagName, attribs };
+      }
+    }
+  });
 };
 
 export const escapeHtml = (value: string): string =>
