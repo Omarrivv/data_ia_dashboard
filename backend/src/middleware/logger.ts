@@ -24,7 +24,7 @@ export function expressLoggerMiddleware(req: Request, res: Response, next: NextF
   const baseMeta = {
     requestId: reqId,
     method: req.method,
-    path: req.originalUrl,
+    path: req.path,
   } as any;
 
   // Attach contextual log to request

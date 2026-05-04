@@ -9,6 +9,7 @@ import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
 import path from 'path';
+import cookieParser from 'cookie-parser';
 
 import { connectDB } from './config/database';
 import { errorHandler } from './middleware/errorHandler';
@@ -28,6 +29,10 @@ import { authLimiter, readLimiter, analysisLimiter, uploadLimiter, adminLimiter,
 // dotenv.config(); // Ya se cargó al inicio
 
 const app = express();
+// Configure trusted proxies for correct client IP resolution behind proxies/load balancers
+if (process.env.TRUST_PROXY) {
+  app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? true : process.env.TRUST_PROXY);
+}
 const PORT = process.env.PORT || 5000;
 
 // Conectar a MongoDB
@@ -42,6 +47,9 @@ app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
   credentials: true
 }));
+
+// Parse cookies securely using cookie-parser middleware
+app.use(cookieParser());
 
 // Rate limiting (granular por tipo de endpoint)
 // Global fallback
@@ -87,7 +95,9 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     const status = res.statusCode || 0;
     try {
-      recordRequest(req.originalUrl, req.method, status, duration);
+      // Use req.path (no query) and normalize to avoid high-cardinality keys and leaking tokens
+      const normalizedPath = req.path || req.originalUrl || '/';
+      recordRequest(normalizedPath, req.method, status, duration);
     } catch (e) {
       logger.warn('Error recording metrics', { err: e instanceof Error ? e.message : String(e) });
     }

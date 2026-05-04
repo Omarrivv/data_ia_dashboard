@@ -62,7 +62,7 @@ function cloneAlerts(alerts: ProjectAlertEntry[] = []): ProjectAlertEntry[] {
 
 export function syncReliabilityAlerts(project: ProjectDocument, score?: number): ProjectReliabilitySnapshot {
   const currentScore = typeof score === 'number' ? score : calculateReliabilityScore(project);
-  const nextAlerts = cloneAlerts((project as any).alerts || []);
+  const nextAlerts = cloneAlerts(project.alerts || []);
   let changed = false;
 
   const activeSeverity: ProjectAlertSeverity | null = currentScore < 40
@@ -131,7 +131,7 @@ export function syncReliabilityAlerts(project: ProjectDocument, score?: number):
     if (existingWarning) resolveAlert(existingWarning);
   }
 
-  (project as any).alerts = nextAlerts;
+  project.alerts = nextAlerts;
 
   return {
     score: currentScore,

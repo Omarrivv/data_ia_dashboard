@@ -19,27 +19,28 @@ interface JwtPayload {
 
 const AUTH_COOKIE_NAME = 'auth_token';
 
-const getCookieValue = (cookieHeader: string | undefined, key: string): string | null => {
-  if (!cookieHeader) return null;
-
-  const parts = cookieHeader.split(';');
-  for (const part of parts) {
-    const [rawName, ...rawValue] = part.trim().split('=');
-    if (rawName === key) {
-      return decodeURIComponent(rawValue.join('='));
-    }
-  }
-
-  return null;
-};
-
 const extractToken = (req: Request): string | null => {
   const authHeader = req.header('Authorization');
   if (authHeader && authHeader.startsWith('Bearer ')) {
     return authHeader.substring(7);
   }
 
-  return getCookieValue(req.headers.cookie, AUTH_COOKIE_NAME);
+  // Prefer Express cookie parsing (cookie-parser middleware) which exposes req.cookies
+  // Fallback to raw header access if cookies are not parsed
+  const cookieToken = (req as any).cookies?.[AUTH_COOKIE_NAME];
+  if (cookieToken) return cookieToken;
+
+  const cookieHeader = req.headers.cookie;
+  if (!cookieHeader) return null;
+  const parts = cookieHeader.split(';');
+  for (const part of parts) {
+    const [rawName, ...rawValue] = part.trim().split('=');
+    if (rawName === AUTH_COOKIE_NAME) {
+      return decodeURIComponent(rawValue.join('='));
+    }
+  }
+
+  return null;
 };
 
 export const authenticate = async (

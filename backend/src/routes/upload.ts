@@ -69,7 +69,7 @@ router.use(authenticate);
  * @desc    Subir archivo de datos a un proyecto
  * @access  Private
  */
-router.post('/:projectId', uploadLimiter, upload.single('file'), asyncHandler(async (req: express.Request, res: express.Response<ApiResponse>) => {
+router.post('/:projectId', upload.single('file'), asyncHandler(async (req: express.Request, res: express.Response<ApiResponse>) => {
   if (!req.user) {
     throw createError('Usuario no autenticado', 401);
   }
