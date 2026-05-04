@@ -7,6 +7,12 @@ let activeWorkers = 0;
 const MAX_CONCURRENCY = parseInt(process.env.ANALYSIS_CONCURRENCY || '2');
 
 export async function enqueueAnalysis(projectId: string, userId: string) {
+  // Prevent duplicate queued/processing jobs for the same project
+  const existing = await AnalysisJob.findOne({ projectId, status: { $in: ['queued', 'processing'] } });
+  if (existing) {
+    return existing;
+  }
+
   const job = await AnalysisJob.create({ projectId, userId, status: 'queued', progress: 0 });
   return job;
 }

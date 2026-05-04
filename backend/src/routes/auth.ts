@@ -86,7 +86,7 @@ const serializeUser = (user: { _id: any; name: string; email: string; role: User
  * @desc    Registrar nuevo usuario
  * @access  Public
  */
-router.post('/register', authLimiter, asyncHandler(async (req: express.Request, res: express.Response<ApiResponse<AuthResponse>>) => {
+router.post('/register', asyncHandler(async (req: express.Request, res: express.Response<ApiResponse<AuthResponse>>) => {
   // Validar datos de entrada
   const { error, value } = registerSchema.validate(req.body);
   if (error) {
@@ -135,7 +135,7 @@ router.post('/register', authLimiter, asyncHandler(async (req: express.Request, 
  * @desc    Iniciar sesión
  * @access  Public
  */
-router.post('/login', authLimiter, asyncHandler(async (req: express.Request, res: express.Response<ApiResponse<AuthResponse>>) => {
+router.post('/login', asyncHandler(async (req: express.Request, res: express.Response<ApiResponse<AuthResponse>>) => {
   // Validar datos de entrada
   const { error, value } = loginSchema.validate(req.body);
   if (error) {

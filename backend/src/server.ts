@@ -95,7 +95,9 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     const status = res.statusCode || 0;
     try {
-      recordRequest(req.originalUrl, req.method, status, duration);
+      // Use req.path (no query) and normalize to avoid high-cardinality keys and leaking tokens
+      const normalizedPath = req.path || req.originalUrl || '/';
+      recordRequest(normalizedPath, req.method, status, duration);
     } catch (e) {
       logger.warn('Error recording metrics', { err: e instanceof Error ? e.message : String(e) });
     }

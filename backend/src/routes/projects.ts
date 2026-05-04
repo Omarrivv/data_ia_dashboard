@@ -393,7 +393,7 @@ router.delete('/:id', asyncHandler(async (req: express.Request, res: express.Res
  * @desc    Analizar proyecto con IA Gemini
  * @access  Private
  */
-router.post('/:id/analyze', analysisLimiter, asyncHandler(async (req: express.Request, res: express.Response<ApiResponse>) => {
+router.post('/:id/analyze', asyncHandler(async (req: express.Request, res: express.Response<ApiResponse>) => {
   if (!req.user) {
     throw createError('Usuario no autenticado', 401);
   }

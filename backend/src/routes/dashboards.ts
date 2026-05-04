@@ -230,7 +230,13 @@ router.delete('/:projectId/widgets/:widgetId', asyncHandler(async (req: express.
     throw createError('Proyecto no encontrado', 404);
   }
 
-  getProjectAccess(project, req.user._id.toString(), 'viewer', getShareTokenFromRequest(req));
+  // Only owners can delete widgets to prevent privilege escalation via shared links
+  // `getProjectAccess` expects a ProjectSharePermission ('viewer'|'editor'),
+  // so request at least 'editor' and then assert the returned accessMode is 'owner'.
+  const access = getProjectAccess(project, req.user._id.toString(), 'editor', getShareTokenFromRequest(req));
+  if (access.accessMode !== 'owner') {
+    throw createError('Permisos insuficientes — se requiere ser owner para eliminar widgets', 403);
+  }
 
   if (!project.dashboard) {
     throw createError('El proyecto no tiene dashboard', 404);
