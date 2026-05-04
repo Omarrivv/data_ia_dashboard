@@ -31,6 +31,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { projectsApi, uploadApi, jobsApi } from '@/lib/api';
 import { Project, Dataset } from '@/types';
+import { ProjectChat } from '@/components/dashboard/ProjectChat';
 
 /** Convierte markdown básico (**negrita**, saltos de línea) en JSX */
 function renderMarkdown(text: string) {
@@ -1612,6 +1613,9 @@ export default function ProjectDetailPage() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Global AI Chat */}
+      <ProjectChat projectId={projectId} projectName={project.name} />
     </div>
   );
 }

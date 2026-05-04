@@ -648,6 +648,39 @@ router.post('/:id/generate-widget', asyncHandler(async (req: express.Request, re
 }));
 
 /**
+ * @route   POST /api/projects/:id/chat-general
+ * @desc    Chatbot general sobre todo el proyecto y sus datasets
+ * @access  Private
+ */
+router.post('/:id/chat-general', asyncHandler(async (req: express.Request, res: express.Response<ApiResponse>) => {
+  if (!req.user) throw createError('Usuario no autenticado', 401);
+
+  const project = await Project.findOne({ _id: req.params.id, userId: req.user._id });
+  if (!project) throw createError('Proyecto no encontrado', 404);
+
+  const { message, conversationHistory = [] } = req.body;
+  if (!message || typeof message !== 'string' || message.trim().length === 0) {
+    throw createError('El mensaje no puede estar vacío', 400);
+  }
+
+  const datasets = (project.datasets || []).map(ds => ({
+    name: ds.originalName,
+    rowCount: ds.metadata?.rowCount || 0,
+    columns: ds.metadata?.columns || [],
+    sampleData: (ds.data || []).slice(0, 5),
+  }));
+
+  const reply = await geminiService.chatAboutProject(message.trim(), {
+    projectName: project.name,
+    projectDescription: project.description,
+    datasets,
+    conversationHistory,
+  });
+
+  res.json({ success: true, data: { reply } });
+}));
+
+/**
  * @route   POST /api/projects/:id/chat
  * @desc    Chatbot sobre un widget específico del dashboard
  * @access  Private

@@ -108,6 +108,12 @@ export const projectsApi = {
   ): Promise<AxiosResponse<ApiResponse<{ reply: string }>>> =>
     api.post(`/projects/${id}/chat`, data),
 
+  chatGeneral: (
+    id: string,
+    data: { message: string; conversationHistory: Array<{ role: string; text: string }> }
+  ): Promise<AxiosResponse<ApiResponse<{ reply: string }>>> =>
+    api.post(`/projects/${id}/chat-general`, data, { timeout: 30000 }),
+
   getDashboard: (id: string, shareToken?: string): Promise<AxiosResponse<ApiResponse<any>>> =>
     api.get(`/projects/${id}/dashboard`, { params: shareToken ? { shareToken } : undefined }),
   
