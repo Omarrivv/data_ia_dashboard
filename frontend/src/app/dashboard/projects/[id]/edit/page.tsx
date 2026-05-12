@@ -175,10 +175,10 @@ export default function EditProjectPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-background dark:bg-slate-950 flex items-center justify-center">
         <div className="flex items-center space-x-2">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-          <span className="text-gray-600">Cargando proyecto...</span>
+          <span className="text-gray-600 dark:text-gray-400">Cargando proyecto...</span>
         </div>
       </div>
     );
@@ -186,10 +186,10 @@ export default function EditProjectPage() {
 
   if (!project) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-background dark:bg-slate-950 flex items-center justify-center">
         <div className="text-center">
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">Proyecto no encontrado</h1>
-          <p className="text-gray-600 mb-4">El proyecto que buscas no existe o no tienes permisos para editarlo.</p>
+          <h1 className="text-2xl font-bold text-foreground dark:text-white mb-2">Proyecto no encontrado</h1>
+          <p className="text-muted-foreground dark:text-gray-400 mb-4">El proyecto que buscas no existe o no tienes permisos para editarlo.</p>
           <button
             onClick={() => router.push('/dashboard/projects')}
             className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
@@ -203,21 +203,21 @@ export default function EditProjectPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-background dark:bg-slate-950">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center space-x-4 mb-4">
             <button
               onClick={() => router.push(`/dashboard/projects/${projectId}`)}
-              className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+              className="inline-flex items-center px-3 py-2 border border-border dark:border-slate-700 shadow-sm text-sm leading-4 font-medium rounded-md text-foreground dark:text-slate-300 bg-white dark:bg-slate-800 hover:bg-accent dark:hover:bg-slate-700"
             >
               <ArrowLeftIcon className="h-4 w-4 mr-2" />
               Volver
             </button>
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Editar Proyecto</h1>
-              <p className="text-gray-600 mt-1">Modificar información y gestionar datasets</p>
+              <h1 className="text-3xl font-bold text-foreground dark:text-white">Editar Proyecto</h1>
+              <p className="text-muted-foreground dark:text-gray-400 mt-1">Modificar información y gestionar datasets</p>
             </div>
           </div>
         </div>
@@ -227,42 +227,42 @@ export default function EditProjectPage() {
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="bg-white shadow rounded-lg"
+            className="bg-white dark:bg-slate-800 shadow dark:shadow-slate-900 rounded-lg"
           >
-            <div className="px-6 py-4 border-b border-gray-200">
-              <h3 className="text-lg font-medium text-gray-900">Información del Proyecto</h3>
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-slate-700">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white">Información del Proyecto</h3>
             </div>
             <form onSubmit={handleSubmit(onSubmit)} className="p-6">
               <div className="grid grid-cols-1 gap-6">
                 <div>
-                  <label htmlFor="name" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                     Nombre del proyecto *
                   </label>
                   <input
                     type="text"
                     id="name"
                     {...register('name')}
-                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-md shadow-sm placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white dark:bg-slate-700 text-gray-900 dark:text-white"
                     placeholder="Ejemplo: Análisis de Ventas Q1"
                   />
                   {errors.name && (
-                    <p className="mt-1 text-sm text-red-600">{errors.name.message}</p>
+                    <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.name.message}</p>
                   )}
                 </div>
 
                 <div>
-                  <label htmlFor="description" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="description" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                     Descripción
                   </label>
                   <textarea
                     id="description"
                     rows={3}
                     {...register('description')}
-                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-md shadow-sm placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white dark:bg-slate-700 text-gray-900 dark:text-white"
                     placeholder="Describe el propósito y objetivos del proyecto..."
                   />
                   {errors.description && (
-                    <p className="mt-1 text-sm text-red-600">{errors.description.message}</p>
+                    <p className="mt-1 text-sm text-red-600 dark:text-red-400">{errors.description.message}</p>
                   )}
                 </div>
               </div>
@@ -271,7 +271,7 @@ export default function EditProjectPage() {
                 <button
                   type="button"
                   onClick={() => router.push(`/dashboard/projects/${projectId}`)}
-                  className="inline-flex justify-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  className="inline-flex justify-center px-4 py-2 border border-gray-300 dark:border-slate-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                 >
                   Cancelar
                 </button>
@@ -291,11 +291,11 @@ export default function EditProjectPage() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
-            className="bg-white shadow rounded-lg"
+            className="bg-white dark:bg-slate-800 shadow dark:shadow-slate-900 rounded-lg"
           >
-            <div className="px-6 py-4 border-b border-gray-200">
-              <h3 className="text-lg font-medium text-gray-900">Gestionar Datasets</h3>
-              <p className="text-sm text-gray-500 mt-1">
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-slate-700">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white">Gestionar Datasets</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                 Sube archivos CSV o Excel para analizar. Máximo 50MB por archivo.
               </p>
             </div>
@@ -306,14 +306,14 @@ export default function EditProjectPage() {
                 {...getRootProps()}
                 className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
                   isDragActive
-                    ? 'border-blue-400 bg-blue-50'
-                    : 'border-gray-300 hover:border-gray-400'
+                    ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20'
+                    : 'border-gray-300 dark:border-slate-600 hover:border-gray-400 dark:hover:border-slate-500'
                 }`}
               >
                 <input {...getInputProps()} />
-                <CloudArrowUpIcon className="mx-auto h-12 w-12 text-gray-400" />
+                <CloudArrowUpIcon className="mx-auto h-12 w-12 text-gray-400 dark:text-slate-500" />
                 <div className="mt-4">
-                  <p className="text-sm text-gray-600">
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
                     {isDragActive
                       ? 'Suelta los archivos aquí...'
                       : 'Arrastra archivos aquí, o haz clic para seleccionar'}
@@ -327,21 +327,21 @@ export default function EditProjectPage() {
               {/* Upload Progress */}
               {Object.keys(uploadProgress).length > 0 && (
                 <div className="mt-6">
-                  <h4 className="text-sm font-medium text-gray-900 mb-3">Subiendo archivos:</h4>
+                  <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-3">Subiendo archivos:</h4>
                   <div className="space-y-2">
                     {Object.entries(uploadProgress).map(([fileName, progress]) => (
                       <div key={fileName} className="flex items-center space-x-3">
-                        <DocumentIcon className="h-5 w-5 text-gray-400" />
+                        <DocumentIcon className="h-5 w-5 text-gray-400 dark:text-slate-500" />
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900 truncate">{fileName}</p>
-                          <div className="w-full bg-gray-200 rounded-full h-2">
+                          <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{fileName}</p>
+                          <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-2">
                             <div
                               className="bg-blue-600 h-2 rounded-full transition-all duration-300"
                               style={{ width: `${progress}%` }}
                             />
                           </div>
                         </div>
-                        <span className="text-sm text-gray-500">{progress}%</span>
+                        <span className="text-sm text-gray-500 dark:text-gray-400">{progress}%</span>
                       </div>
                     ))}
                   </div>
@@ -351,36 +351,36 @@ export default function EditProjectPage() {
               {/* Current Datasets */}
               {project.datasets && project.datasets.length > 0 && (
                 <div className="mt-8">
-                  <h4 className="text-sm font-medium text-gray-900 mb-3">
+                  <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-3">
                     Datasets actuales ({project.datasets.length}):
                   </h4>
                   <div className="space-y-3">
                     {project.datasets.map((dataset: Dataset) => (
                       <div
                         key={dataset._id}
-                        className="flex items-center justify-between p-4 border border-gray-200 rounded-lg"
+                        className="flex items-center justify-between p-4 border border-gray-200 dark:border-slate-700 rounded-lg bg-gray-50 dark:bg-slate-700"
                       >
                         <div className="flex items-center space-x-3">
                           <DocumentIcon className="h-8 w-8 text-blue-500" />
                           <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium text-gray-900">
+                            <p className="text-sm font-medium text-gray-900 dark:text-white">
                               {dataset.originalName}
                             </p>
-                            <p className="text-sm text-gray-500">
+                            <p className="text-sm text-gray-500 dark:text-gray-400">
                               {formatFileSize(dataset.size)} • {dataset.metadata?.rowCount || 0} registros • {new Date(dataset.uploadedAt).toLocaleDateString('es-ES')}
                             </p>
                           </div>
                         </div>
 
                         <div className="flex items-center space-x-2">
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300">
                             <CheckIcon className="h-3 w-3 mr-1" />
                             Procesado
                           </span>
                           <button
                             onClick={() => handleDeleteDataset(dataset._id, dataset.originalName)}
                             disabled={deleteDatasetMutation.isPending}
-                            className="inline-flex items-center p-1.5 border border-transparent rounded text-red-600 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50"
+                            className="inline-flex items-center p-1.5 border border-transparent rounded text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50"
                           >
                             <TrashIcon className="h-4 w-4" />
                           </button>
@@ -395,8 +395,8 @@ export default function EditProjectPage() {
               {(!project.datasets || project.datasets.length === 0) && Object.keys(uploadProgress).length === 0 && (
                 <div className="text-center py-8">
                   <ExclamationTriangleIcon className="mx-auto h-12 w-12 text-yellow-400" />
-                  <h3 className="mt-2 text-sm font-medium text-gray-900">Sin datasets</h3>
-                  <p className="mt-1 text-sm text-gray-500">
+                  <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-white">Sin datasets</h3>
+                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                     Este proyecto no tiene datasets. Sube archivos para empezar el análisis.
                   </p>
                 </div>

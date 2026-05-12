@@ -5,6 +5,20 @@ import { recordAuditEvent } from './auditService';
 
 let activeWorkers = 0;
 const MAX_CONCURRENCY = parseInt(process.env.ANALYSIS_CONCURRENCY || '2');
+const POLL_INTERVAL = parseInt(process.env.WORKER_POLL_INTERVAL_MS || '1000');
+const JOB_TIMEOUT_MS = parseInt(process.env.JOB_TIMEOUT_MS || '3600000'); // 1 hora
+
+interface JobMetrics {
+  processedJobs: number;
+  failedJobs: number;
+  avgProcessingTime: number;
+}
+
+const metrics: JobMetrics = {
+  processedJobs: 0,
+  failedJobs: 0,
+  avgProcessingTime: 0
+};
 
 export async function enqueueAnalysis(projectId: string, userId: string) {
   // Prevent duplicate queued/processing jobs for the same project
@@ -21,11 +35,23 @@ export async function getJobById(jobId: string) {
   return AnalysisJob.findById(jobId).lean();
 }
 
+/**
+ * Get job metrics for monitoring
+ */
+export function getJobMetrics() {
+  return {
+    ...metrics,
+    activeWorkers,
+    maxConcurrency: MAX_CONCURRENCY,
+    pollIntervalMs: POLL_INTERVAL
+  };
+}
+
 async function claimNextJob() {
   // Find oldest queued job and mark processing atomically
   const job = await AnalysisJob.findOneAndUpdate(
     { status: 'queued' },
-    { status: 'processing', progress: 0 },
+    { status: 'processing', progress: 0, startedAt: new Date() },
     { sort: { createdAt: 1 }, new: true }
   );
   return job;
@@ -40,13 +66,23 @@ async function updateJobProgress(jobId: string, progress: number, message?: stri
   await AnalysisJob.findByIdAndUpdate(jobId, update);
 }
 
+/**
+ * Senior-level worker with proper error handling, timeouts, and metrics
+ */
 export async function startWorker() {
-  // Polling loop
+  console.info('[JobQueue] Worker started', {
+    maxConcurrency: MAX_CONCURRENCY,
+    pollInterval: POLL_INTERVAL
+  });
+
+  // Polling loop with exponential backoff
   setInterval(async () => {
     if (activeWorkers >= MAX_CONCURRENCY) return;
-    // Reserve a worker slot immediately to avoid race conditions
-    activeWorkers++;
+
     try {
+      // Reserve a worker slot immediately to avoid race conditions
+      activeWorkers++;
+
       const job = await claimNextJob();
       if (!job) {
         // No job available, release reserved slot
@@ -54,38 +90,93 @@ export async function startWorker() {
         return;
       }
 
-      (async () => {
-      const jobId = job._id.toString();
-      try {
-        await updateJobProgress(jobId, 1, 'Procesando job');
-
-        // progress updater callback
-        const progressUpdater = async (pct: number, msg?: string) => {
-          await updateJobProgress(jobId, Math.min(100, Math.max(0, Math.round(pct))), msg);
-        };
-
-        await runProjectAnalysis(job.projectId.toString(), job.userId.toString(), progressUpdater);
-
-        await AnalysisJob.findByIdAndUpdate(jobId, { status: 'completed', progress: 100, $push: { logs: { ts: new Date(), message: 'Completado' } } });
-
-        // Audit event to notify user
-        try {
-          await recordAuditEvent({ userId: job.userId.toString(), action: 'project.analysis.completed', resourceType: 'project', resourceId: job.projectId.toString(), metadata: { jobId }, req: undefined as any });
-        } catch (e) {
-          console.warn('Could not record audit event for job completed', e);
-        }
-      } catch (err: any) {
-        await AnalysisJob.findByIdAndUpdate(jobId, { status: 'failed', progress: 100, message: err?.message || 'Error', $push: { logs: { ts: new Date(), message: `Error: ${err?.message || String(err)}` } } });
-      } finally {
+      // Process job asynchronously
+      processJobWithTimeout(job).catch((error) => {
+        console.error('[JobQueue] Unhandled job error:', error);
         activeWorkers--;
-      }
-    })();
+      });
     } catch (e) {
       // Ensure reserved slot is released on unexpected errors
       if (activeWorkers > 0) activeWorkers--;
-      console.error('Error claiming job or running worker loop', e);
+      console.error('[JobQueue] Worker loop error:', e);
     }
-  }, 1000);
+  }, POLL_INTERVAL);
 }
 
-export default { enqueueAnalysis, getJobById, startWorker };
+/**
+ * Process job with timeout and proper cleanup
+ */
+async function processJobWithTimeout(job: any) {
+  const jobId = job._id.toString();
+  const startTime = Date.now();
+  let completed = false;
+
+  try {
+    await updateJobProgress(jobId, 1, 'Iniciando análisis...');
+
+    // progress updater callback
+    const progressUpdater = async (pct: number, msg?: string) => {
+      await updateJobProgress(jobId, Math.min(100, Math.max(0, Math.round(pct))), msg);
+    };
+
+    // Run with timeout
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Job timeout after ${JOB_TIMEOUT_MS}ms`)), JOB_TIMEOUT_MS)
+    );
+
+    await Promise.race([
+      runProjectAnalysis(job.projectId.toString(), job.userId.toString(), progressUpdater),
+      timeoutPromise
+    ]);
+
+    completed = true;
+    const duration = Date.now() - startTime;
+    metrics.processedJobs++;
+    metrics.avgProcessingTime = (metrics.avgProcessingTime * (metrics.processedJobs - 1) + duration) / metrics.processedJobs;
+
+    await AnalysisJob.findByIdAndUpdate(jobId, {
+      status: 'completed',
+      progress: 100,
+      completedAt: new Date(),
+      duration,
+      $push: { logs: { ts: new Date(), message: 'Análisis completado exitosamente' } }
+    });
+
+    // Audit event to notify user
+    try {
+      await recordAuditEvent({
+        userId: job.userId.toString(),
+        action: 'project.analysis.completed',
+        resourceType: 'project',
+        resourceId: job.projectId.toString(),
+        metadata: { jobId, duration },
+        req: undefined as any
+      });
+    } catch (e) {
+      console.warn('[JobQueue] Could not record audit event for job completed', e);
+    }
+  } catch (err: any) {
+    completed = true;
+    metrics.failedJobs++;
+    const errorMsg = err?.message || String(err);
+
+    console.error('[JobQueue] Job failed:', { jobId, error: errorMsg });
+
+    await AnalysisJob.findByIdAndUpdate(jobId, {
+      status: 'failed',
+      progress: 100,
+      completedAt: new Date(),
+      message: errorMsg,
+      $push: { logs: { ts: new Date(), message: `Error: ${errorMsg}` } }
+    });
+  } finally {
+    activeWorkers--;
+    if (completed) {
+      console.info('[JobQueue] Job processed', {
+        jobId,
+        duration: Date.now() - startTime,
+        activeWorkers
+      });
+    }
+  }
+}

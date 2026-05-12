@@ -8,12 +8,21 @@ import Joi from 'joi';
 import { authenticate } from '../middleware/auth';
 import { asyncHandler, createError } from '../middleware/errorHandler';
 import { Project } from '../models/Project';
+import { DatasetChunk } from '../models/DatasetChunk';
 import { ApiResponse, Dataset, ColumnInfo, DatasetMetadata } from '../types';
 import { recordAuditEvent } from '../services/auditService';
-import { isPlainObject, sanitizeFilename, validateDatasetRows, MAX_UPLOAD_ROWS } from '../utils/validation';
+import { isPlainObject, sanitizeFilename, validateDatasetRows } from '../utils/validation';
 import { uploadLimiter } from '../middleware/rateLimiters';
 import { getProjectAccess, getShareTokenFromRequest } from '../middleware/projectAccess';
 import { syncReliabilityAlerts } from '../services/projectAlertService';
+import { computeStats, DataStats, summarizeDataset, DEFAULT_CHUNK_CONFIG } from '../utils/dataProcessor';
+import {
+  validateCellSecurity,
+  validateRowSecurity,
+  validateDatasetMetadata,
+  validateDatasetSecurity,
+  DATASET_SECURITY_LIMITS
+} from '../utils/datasetSecurity';
 
 const router = express.Router();
 
@@ -92,24 +101,77 @@ router.post('/:projectId', upload.single('file'), asyncHandler(async (req: expre
 
   getProjectAccess(project, req.user._id.toString(), 'editor', getShareTokenFromRequest(req));
 
-  // Procesar el archivo en memoria — nunca se guarda en disco
+  // Procesar archivo con streaming/chunking para grandes datasets
+  const startTime = Date.now();
   const data = await processFile(req.file);
-  const metadata = generateMetadata(data);
+  const processingTime = Date.now() - startTime;
+  
+  // Aplicar validaciones de seguridad ANTES de procesar
+  const securityCheck = await validateDatasetSecurity(data, req.file.originalname, req.file.mimetype);
+  if (securityCheck.warnings.length > 0) {
+    console.warn('[Security] Warnings in dataset:', securityCheck.warnings);
+    // Log warnings pero no bloquear (solo información)
+  }
+
+  // Validar datos con sanitización de seguridad
+  const sanitizedData = data.map((row, idx) => validateRowSecurity(row, idx));
+
+  const stats = computeStats(sanitizedData);
   const safeFilename = sanitizeFilename(req.file.originalname);
 
-  // Crear dataset
+  // Validar metadata del dataset
+  validateDatasetMetadata(stats.rowCount, stats.columnCount, stats.estimatedSize);
+
+  console.info(`[Upload] Processed ${stats.rowCount} rows in ${processingTime}ms`, {
+    filename: safeFilename,
+    rows: stats.rowCount,
+    columns: stats.columnCount,
+    estimatedSize: stats.estimatedSize,
+    securityWarnings: securityCheck.warnings.length
+  });
+
+  // Crear dataset metadata (sin guardar todos los datos inline)
   const dataset: Omit<Dataset, '_id'> = {
     filename: safeFilename,
     originalName: safeFilename,
     mimetype: req.file.mimetype,
     size: req.file.size,
-    data: data.slice(0, 1000), // Limitar a 1000 registros para almacenamiento
-    metadata,
+    data: sanitizedData.slice(0, 100), // Preview de 100 registros para UI
+    metadata: {
+      columns: Array.from(stats.columns.values()).map(col => ({
+        name: col.name,
+        type: col.type as any,
+        nullable: col.nullable > 0,
+        unique: col.unique > (stats.rowCount * 0.9),
+        examples: col.examples
+      })),
+      rowCount: stats.rowCount,
+      dataTypes: Object.fromEntries(
+        Array.from(stats.columns.entries()).map(([k, v]) => [k, v.type])
+      ),
+      summary: `${stats.rowCount} filas, ${stats.columnCount} columnas`,
+      insights: generateInsights(stats)
+    },
     uploadedAt: new Date()
   };
 
   // Agregar dataset al proyecto
   project.datasets.push(dataset as any);
+  await project.save();
+
+  const datasetId = project.datasets[project.datasets.length - 1]._id;
+
+  // Guardar TODOS los datos en chunks (async, no bloquear respuesta)
+  const chunkCount = Math.ceil(sanitizedData.length / DATASET_SECURITY_LIMITS.CHUNK_SIZE);
+  saveDatasetChunksAsync(
+    datasetId,
+    project._id,
+    sanitizedData,
+    chunkCount
+  ).catch(error => {
+    console.error('[Error] Saving chunks:', error);
+  });
+
   syncReliabilityAlerts(project);
   await project.save();
 
@@ -118,7 +180,15 @@ router.post('/:projectId', upload.single('file'), asyncHandler(async (req: expre
     action: 'dataset.upload',
     resourceType: 'project',
     resourceId: project._id.toString(),
-      metadata: { filename: safeFilename, size: req.file.size },
+    metadata: {
+      filename: safeFilename,
+      size: req.file.size,
+      rows: stats.rowCount,
+      columns: stats.columnCount,
+      processingTimeMs: processingTime,
+      chunks: chunkCount,
+      securityWarnings: securityCheck.warnings
+    },
     req,
   });
 
@@ -127,13 +197,14 @@ router.post('/:projectId', upload.single('file'), asyncHandler(async (req: expre
     data: {
       dataset: {
         ...dataset,
-        _id: project.datasets[project.datasets.length - 1]._id
+        _id: datasetId
       },
       project: {
         _id: project._id,
         name: project.name,
         totalDatasets: project.datasets.length
-      }
+      },
+      notice: `Dataset con ${stats.rowCount} registros se está procesando en background`
     },
     message: 'Archivo subido y procesado exitosamente'
   });
@@ -207,6 +278,46 @@ router.get('/:projectId/datasets/:datasetId', asyncHandler(async (req: express.R
 }));
 
 /**
+ * @route   GET /api/upload/:projectId/datasets/:datasetId/data
+ * @desc    Obtener datos del dataset desde chunks (con pagination)
+ * @access  Private
+ */
+router.get('/:projectId/datasets/:datasetId/data', asyncHandler(async (req: express.Request, res: express.Response<ApiResponse>) => {
+  if (!req.user) {
+    throw createError('Usuario no autenticado', 401);
+  }
+
+  const project = await Project.findOne({
+    _id: req.params.projectId,
+    userId: req.user._id
+  });
+
+  if (!project) {
+    throw createError('Proyecto no encontrado', 404);
+  }
+
+  const dataset = project.datasets.find(ds => ds._id.toString() === req.params.datasetId);
+  if (!dataset) {
+    throw createError('Dataset no encontrado', 404);
+  }
+
+  const skip = Math.max(0, parseInt(req.query.skip as string) || 0);
+  const limit = Math.min(10000, Math.max(1, parseInt(req.query.limit as string) || 1000));
+
+  // Obtener datos desde chunks
+  const chunkedData = await getDataChunks(req.params.datasetId, skip, limit);
+
+  res.json({
+    success: true,
+    data: {
+      ...chunkedData,
+      columns: dataset.metadata?.columns || [],
+      info: `Mostrando ${chunkedData.data.length}/${chunkedData.total} registros`
+    }
+  });
+}));
+
+/**
  * @route   DELETE /api/upload/:projectId/datasets/:datasetId
  * @desc    Eliminar dataset de un proyecto
  * @access  Private
@@ -234,6 +345,11 @@ router.delete('/:projectId/datasets/:datasetId', asyncHandler(async (req: expres
   project.datasets.splice(datasetIndex, 1);
   await project.save();
 
+  // Eliminar chunks en background (async, no bloquear respuesta)
+  deleteDatasetChunksAsync(req.params.datasetId).catch(error => {
+    console.error('[Error] Deleting chunks:', error);
+  });
+
   recordAuditEvent({
     userId: req.user._id.toString(),
     action: 'dataset.delete',
@@ -249,7 +365,111 @@ router.delete('/:projectId/datasets/:datasetId', asyncHandler(async (req: expres
   });
 }));
 
-// Funciones auxiliares
+/**
+ * Guarda datos en chunks de forma asincrónica (no bloquea respuesta)
+ */
+async function saveDatasetChunksAsync(
+  datasetId: any,
+  projectId: any,
+  data: any[],
+  totalChunks: number
+): Promise<void> {
+  const CHUNK_SIZE = DATASET_SECURITY_LIMITS.CHUNK_SIZE;
+  
+  try {
+    console.info(`[Chunks] Saving ${totalChunks} chunks for dataset ${datasetId}`);
+    
+    // Guardar chunks en batches de 10 para no sobrecargar BD
+    for (let i = 0; i < totalChunks; i += 10) {
+      const batchEnd = Math.min(i + 10, totalChunks);
+      const batchChunks: any[] = [];
+
+      for (let chunkIdx = i; chunkIdx < batchEnd; chunkIdx++) {
+        const startRow = chunkIdx * CHUNK_SIZE;
+        const endRow = Math.min(startRow + CHUNK_SIZE, data.length);
+        const chunkData = data.slice(startRow, endRow);
+
+        if (chunkData.length > 0) {
+          batchChunks.push({
+            datasetId,
+            projectId,
+            chunkIndex: chunkIdx,
+            data: chunkData,
+            rowStart: startRow,
+            rowEnd: endRow,
+            rowCount: chunkData.length
+          });
+        }
+      }
+
+      // Insertar batch de chunks
+      await DatasetChunk.insertMany(batchChunks);
+      console.info(`[Chunks] Saved chunks ${i}-${batchEnd - 1} for dataset ${datasetId}`);
+    }
+
+    console.info(`[Chunks] ✓ All ${totalChunks} chunks saved for dataset ${datasetId}`);
+  } catch (error) {
+    console.error('[Chunks] Error saving chunks:', error);
+    // No lanzar error, solo loguear (ya respondimos al cliente)
+  }
+}
+
+/**
+ * Obtiene un rango de datos desde chunks (con pagination)
+ */
+async function getDataChunks(
+  datasetId: string,
+  skip: number = 0,
+  limit: number = 1000
+): Promise<{ data: any[]; total: number; skip: number; limit: number }> {
+  const totalChunks = await DatasetChunk.countDocuments({ datasetId });
+  
+  if (totalChunks === 0) {
+    return { data: [], total: 0, skip, limit };
+  }
+
+  // Calcular qué chunks necesitamos
+  const CHUNK_SIZE = DATASET_SECURITY_LIMITS.CHUNK_SIZE;
+  const skipChunk = Math.floor(skip / CHUNK_SIZE);
+  const skipInChunk = skip % CHUNK_SIZE;
+  const neededChunks = Math.ceil((skipInChunk + limit) / CHUNK_SIZE);
+
+  // Obtener chunks
+  const chunks = await DatasetChunk.find({
+    datasetId,
+    chunkIndex: { $gte: skipChunk, $lt: skipChunk + neededChunks }
+  })
+    .sort({ chunkIndex: 1 })
+    .lean();
+
+  // Unir datos y aplicar skip/limit
+  const allData = chunks.flatMap(c => c.data);
+  const result = allData.slice(skipInChunk, skipInChunk + limit);
+
+  // Obtener total de filas
+  const firstChunk = chunks[0];
+  const lastChunk = chunks[chunks.length - 1];
+  const total = lastChunk ? lastChunk.rowEnd : 0;
+
+  return {
+    data: result,
+    total,
+    skip,
+    limit
+  };
+}
+
+/**
+ * Elimina todos los chunks de un dataset de forma asincrónica
+ */
+async function deleteDatasetChunksAsync(datasetId: string): Promise<void> {
+  try {
+    const result = await DatasetChunk.deleteMany({ datasetId });
+    console.info(`[Chunks] Deleted ${result.deletedCount} chunks for dataset ${datasetId}`);
+  } catch (error) {
+    console.error('[Chunks] Error deleting chunks:', error);
+  }
+}
 
 /**
  * Procesa un archivo desde su buffer en memoria según su tipo
@@ -301,11 +521,6 @@ function processCSV(buffer: Buffer): Promise<any[]> {
 
       results.push(data);
 
-      if (results.length > MAX_UPLOAD_ROWS) {
-        parser.destroy(new Error(`El archivo excede el máximo de ${MAX_UPLOAD_ROWS} filas permitidas`));
-        return;
-      }
-
       try {
         validateDatasetRows([data]);
       } catch (validationError) {
@@ -353,6 +568,36 @@ async function processJSON(buffer: Buffer): Promise<any[]> {
 /**
  * Procesa Excel desde buffer
  */
+function generateInsights(stats: DataStats): string[] {
+  const insights: string[] = [];
+
+  // Detectar columnas con muchos nulos
+  for (const [, col] of stats.columns) {
+    const nullPercentage = (col.nullable / stats.rowCount) * 100;
+    if (nullPercentage > 50) {
+      insights.push(`Columna "${col.name}" tiene ${Math.round(nullPercentage)}% valores nulos`);
+    }
+  }
+
+  // Detectar columnas con muchos valores únicos (posible ID)
+  for (const [, col] of stats.columns) {
+    const uniquePercentage = (col.unique / stats.rowCount) * 100;
+    if (uniquePercentage > 95 && col.type === 'string') {
+      insights.push(`Columna "${col.name}" parece ser un identificador (${col.unique} valores únicos)`);
+    }
+  }
+
+  // Recomendación general
+  if (stats.rowCount > 50000) {
+    insights.push(`Dataset grande (${stats.rowCount} filas): análisis en chunks para mejor rendimiento`);
+  }
+
+  return insights.slice(0, 3); // Limitar a 3 insights
+}
+
+/**
+ * Procesa Excel desde buffer
+ */
 async function processExcel(buffer: Buffer): Promise<any[]> {
   const workbook = XLSX.read(buffer, { type: 'buffer' });
   const sheetName = workbook.SheetNames[0];
@@ -361,114 +606,6 @@ async function processExcel(buffer: Buffer): Promise<any[]> {
   const rows = XLSX.utils.sheet_to_json(worksheet);
   validateDatasetRows(rows);
   return rows;
-}
-
-/**
- * Genera metadatos para un dataset
- */
-function generateMetadata(data: any[]): DatasetMetadata {
-  if (!data || data.length === 0) {
-    return {
-      columns: [],
-      rowCount: 0,
-      dataTypes: {},
-      summary: 'Dataset vacío',
-      insights: []
-    };
-  }
-
-  const firstRow = data[0];
-  const columns: ColumnInfo[] = [];
-  const dataTypes: Record<string, string> = {};
-
-  if (!isPlainObject(firstRow)) {
-    throw new Error('El dataset debe contener objetos válidos');
-  }
-
-  // Analizar cada columna
-  Object.keys(firstRow).forEach(columnName => {
-    const columnValues = data.map(row => row[columnName]).filter(val => val !== null && val !== undefined);
-    const type = inferDataType(columnValues);
-    const unique = new Set(columnValues).size === columnValues.length;
-    const nullable = columnValues.length < data.length;
-
-    columns.push({
-      name: columnName,
-      type,
-      nullable,
-      unique,
-      examples: columnValues.slice(0, 3)
-    });
-
-    dataTypes[columnName] = type;
-  });
-
-  return {
-    columns,
-    rowCount: data.length,
-    dataTypes,
-    summary: `Dataset con ${data.length} filas y ${columns.length} columnas`,
-    insights: generateBasicInsights(data, columns)
-  };
-}
-
-/**
- * Infiere el tipo de dato de una columna
- */
-function inferDataType(values: any[]): 'string' | 'number' | 'date' | 'boolean' {
-  if (values.length === 0) return 'string';
-
-  const sample = values.slice(0, 100); // Muestra de 100 valores
-  
-  // Verificar si son números
-  const numericCount = sample.filter(val => !isNaN(Number(val)) && val !== '').length;
-  if (numericCount / sample.length > 0.8) {
-    return 'number';
-  }
-  
-  // Verificar si son fechas
-  const dateCount = sample.filter(val => !isNaN(Date.parse(val))).length;
-  if (dateCount / sample.length > 0.8) {
-    return 'date';
-  }
-  
-  // Verificar si son booleanos
-  const booleanValues = ['true', 'false', '1', '0', 'yes', 'no', 'sí', 'no'];
-  const booleanCount = sample.filter(val => 
-    booleanValues.includes(String(val).toLowerCase())
-  ).length;
-  if (booleanCount / sample.length > 0.8) {
-    return 'boolean';
-  }
-  
-  return 'string';
-}
-
-/**
- * Genera insights básicos del dataset
- */
-function generateBasicInsights(data: any[], columns: ColumnInfo[]): string[] {
-  const insights: string[] = [];
-  
-  insights.push(`El dataset contiene ${data.length} registros`);
-  insights.push(`Se identificaron ${columns.length} columnas`);
-  
-  const numericColumns = columns.filter(col => col.type === 'number');
-  if (numericColumns.length > 0) {
-    insights.push(`${numericColumns.length} columnas numéricas detectadas`);
-  }
-  
-  const dateColumns = columns.filter(col => col.type === 'date');
-  if (dateColumns.length > 0) {
-    insights.push(`${dateColumns.length} columnas de fecha detectadas`);
-  }
-  
-  const uniqueColumns = columns.filter(col => col.unique);
-  if (uniqueColumns.length > 0) {
-    insights.push(`${uniqueColumns.length} columnas con valores únicos`);
-  }
-  
-  return insights;
 }
 
 export default router;

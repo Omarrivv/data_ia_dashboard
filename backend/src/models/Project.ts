@@ -257,19 +257,24 @@ const projectSchema = new Schema<ProjectDocument>({
   }
 });
 
-// Índices
-projectSchema.index({ userId: 1, createdAt: -1 });
-projectSchema.index({ name: 'text', description: 'text' });
-projectSchema.index({ status: 1 });
+// Índices de optimización para queries frecuentes
+projectSchema.index({ userId: 1, createdAt: -1 }); // Listar proyectos del usuario
+projectSchema.index({ userId: 1, status: 1 }); // Filtrar por status
+projectSchema.index({ name: 'text', description: 'text' }); // Búsqueda de texto
+projectSchema.index({ status: 1 }); // Filtro global por status
+projectSchema.index({ domain: 1 }); // Filtro por dominio
+projectSchema.index({ 'sharing.enabled': 1, 'sharing.token': 1 }); // Proyectos compartidos
+projectSchema.index({ updatedAt: -1 }); // Ordenamiento por fecha
+projectSchema.index({ createdAt: -1 }); // Ordenamiento por creación
 
-// Middleware para limpiar datasets grandes antes de guardar
+// Middleware para optimizar almacenamiento de datasets grandes
 projectSchema.pre('save', function(this: ProjectDocument, next) {
-  // Limitar el tamaño de los datos almacenados
+  // Limitar el tamaño de los datos almacenados en BD (guardar solo preview)
   if (this.datasets) {
     this.datasets.forEach((dataset: any) => {
-      if (dataset.data && dataset.data.length > 1000) {
-        // Mantener solo una muestra para datasets muy grandes
-        dataset.data = dataset.data.slice(0, 1000);
+      if (dataset.data && dataset.data.length > 100) {
+        // Mantener solo primeras 100 filas como preview
+        dataset.data = dataset.data.slice(0, 100);
       }
     });
   }

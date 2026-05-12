@@ -28,7 +28,7 @@ export function DashboardHeader() {
     .toUpperCase();
 
   return (
-    <div className="bg-white/80 dark:bg-slate-950/70 backdrop-blur-xl border-b border-border shadow-sm">
+    <div className="bg-white/80 dark:bg-slate-950/70 backdrop-blur-xl border-b border-border shadow-sm relative z-[1000]">
       <div className="px-4 sm:px-6 lg:px-8 py-3.5">
         <div className="flex justify-between h-16 items-center">
           <div className="flex items-center" />
@@ -65,7 +65,7 @@ export function DashboardHeader() {
             <div className="h-6 w-px bg-border mx-1" />
 
             {/* Profile dropdown */}
-            <Menu as="div" className="relative">
+            <Menu as="div" className="relative z-[9999]">
               <Menu.Button className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg hover:bg-accent dark:hover:bg-slate-800 transition-colors focus:outline-none focus:ring-2 focus:ring-primary group">
                 <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-cyan-500 via-blue-500 to-violet-600 flex items-center justify-center shadow-sm flex-shrink-0 ring-1 ring-white/20">
                   <span className="text-xs font-bold text-white">{initials}</span>
@@ -87,29 +87,29 @@ export function DashboardHeader() {
                 leaveFrom="transform opacity-100 scale-100"
                 leaveTo="transform opacity-0 scale-95"
               >
-                <Menu.Items className="absolute right-0 mt-2 w-56 rounded-xl shadow-lg bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl ring-1 ring-border dark:ring-slate-700 focus:outline-none z-50 overflow-hidden">
-                  <div className="px-4 py-3 bg-gradient-to-r from-slate-50 to-indigo-50 dark:from-slate-900 dark:to-slate-800 border-b border-border dark:border-slate-700 flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-cyan-500 via-blue-500 to-violet-600 flex items-center justify-center flex-shrink-0 shadow-sm ring-1 ring-white/20">
+                <Menu.Items className="absolute right-0 mt-2 w-64 rounded-xl shadow-2xl bg-white dark:bg-slate-950 backdrop-blur-xl ring-1 ring-border dark:ring-slate-700 focus:outline-none z-[9999] overflow-hidden">
+                  <div className="px-4 py-4 bg-gradient-to-r from-slate-50 to-indigo-50 dark:from-slate-950 dark:to-slate-900 border-b border-border dark:border-slate-700 flex items-center gap-3">
+                    <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-cyan-500 via-blue-500 to-violet-600 flex items-center justify-center flex-shrink-0 shadow-md ring-1 ring-white/20">
                       <span className="text-sm font-bold text-white">{initials}</span>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-foreground dark:text-slate-100 truncate">{user?.name}</p>
-                      <p className="text-xs text-muted-foreground dark:text-slate-400 truncate">{user?.email}</p>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-foreground dark:text-slate-100 break-words">{user?.name}</p>
+                      <p className="text-xs text-muted-foreground dark:text-slate-400 break-words">{user?.email}</p>
                     </div>
                   </div>
 
-                  <div className="py-1">
+                  <div className="py-2 space-y-1">
                     <Menu.Item>
                       {({ active }) => (
                         <Link
                           href="/dashboard/profile"
                           className={clsx(
-                            active ? 'bg-accent dark:bg-slate-800' : '',
-                            'flex items-center gap-3 px-4 py-2.5 text-sm text-foreground dark:text-slate-300 transition-colors'
+                            active ? 'bg-slate-100 dark:bg-slate-800' : '',
+                            'flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-foreground dark:text-slate-300 transition-colors'
                           )}
                         >
-                          <UserCircleIcon className="h-4 w-4 text-muted-foreground dark:text-slate-500" />
-                          Mi Perfil
+                          <UserCircleIcon className="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                          <span>Mi Perfil</span>
                         </Link>
                       )}
                     </Menu.Item>
@@ -119,12 +119,12 @@ export function DashboardHeader() {
                         <Link
                           href="/dashboard/settings"
                           className={clsx(
-                            active ? 'bg-accent dark:bg-slate-800' : '',
-                            'flex items-center gap-3 px-4 py-2.5 text-sm text-foreground dark:text-slate-300 transition-colors'
+                            active ? 'bg-blue-50 dark:bg-slate-800' : '',
+                            'flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-foreground dark:text-slate-300 transition-colors'
                           )}
                         >
-                          <CogIcon className="h-4 w-4 text-muted-foreground dark:text-slate-500" />
-                          Configuración
+                          <CogIcon className="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                          <span>Configuración</span>
                         </Link>
                       )}
                     </Menu.Item>
@@ -135,30 +135,30 @@ export function DashboardHeader() {
                           <Link
                             href="/dashboard/admin/audit"
                             className={clsx(
-                              active ? 'bg-accent dark:bg-slate-800' : '',
-                              'flex items-center gap-3 px-4 py-2.5 text-sm text-foreground dark:text-slate-300 transition-colors'
+                              active ? 'bg-amber-50 dark:bg-slate-800' : '',
+                              'flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-foreground dark:text-slate-300 transition-colors'
                             )}
                           >
-                              <UserCircleIcon className="h-4 w-4 text-muted-foreground dark:text-slate-500" />
-                            Auditoría
+                            <UserCircleIcon className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+                            <span>Auditoría</span>
                           </Link>
                         )}
                       </Menu.Item>
                     )}
                   </div>
 
-                  <div className="border-t border-border dark:border-slate-700 py-1">
+                  <div className="border-t border-border dark:border-slate-700 py-2">
                     <Menu.Item>
                       {({ active }) => (
                         <button
                           onClick={logout}
                           className={clsx(
                             active ? 'bg-red-50 dark:bg-red-900/20' : '',
-                            'flex items-center gap-3 w-full text-left px-4 py-2.5 text-sm text-red-600 dark:text-red-400 transition-colors'
+                            'flex items-center gap-3 w-full text-left px-4 py-2.5 text-sm font-medium text-red-600 dark:text-red-400 transition-colors'
                           )}
                         >
-                          <ArrowRightOnRectangleIcon className="h-4 w-4" />
-                          Cerrar sesión
+                          <ArrowRightOnRectangleIcon className="h-5 w-5 flex-shrink-0" />
+                          <span>Cerrar sesión</span>
                         </button>
                       )}
                     </Menu.Item>
