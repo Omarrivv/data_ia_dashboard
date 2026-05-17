@@ -1,8 +1,27 @@
 import { Project } from '../models/Project';
+import { DatasetChunk } from '../models/DatasetChunk';
 import { ProjectStatus, GeminiAnalysisResult, Widget, ProjectDomain } from '../types';
 import { geminiService } from './geminiService';
 import { sanitizeHtmlContent } from '../utils/security';
 import { syncReliabilityAlerts } from './projectAlertService';
+
+/**
+ * Carga todos los chunks de un dataset desde MongoDB y devuelve el array completo de filas.
+ * Si no hay chunks guardados (aún procesándose o dataset pequeño), devuelve los datos inline.
+ */
+async function loadFullDatasetData(datasetId: string, inlineData: any[]): Promise<any[]> {
+  const chunkCount = await DatasetChunk.countDocuments({ datasetId });
+  if (chunkCount === 0) {
+    // Sin chunks: usar datos inline (dataset pequeño o chunks aún no guardados)
+    return inlineData;
+  }
+  const chunks = await DatasetChunk.find({ datasetId })
+    .sort({ chunkIndex: 1 })
+    .lean();
+  const fullData = chunks.flatMap((c: any) => c.data);
+  console.info(`[Analysis] Dataset ${datasetId}: cargadas ${fullData.length} filas desde ${chunkCount} chunks`);
+  return fullData;
+}
 
 const MAX_DOCUMENTATION_LENGTH = 150000;
 
@@ -98,14 +117,30 @@ export async function runProjectAnalysis(projectId: string, userId: string, prog
     const analysisResults: GeminiAnalysisResult[] = [];
     for (let i = 0; i < project.datasets.length; i++) {
       const dataset = project.datasets[i];
-      const analysis = await geminiService.analyzeDataset(dataset);
+
+      // Cargar el 100% de los datos desde DatasetChunk antes de analizar.
+      // dataset.data solo tiene el preview de 100 filas guardado en el Project document.
+      const fullData = await loadFullDatasetData(
+        dataset._id.toString(),
+        dataset.data
+      );
+      const datasetWithFullData = { ...dataset.toObject ? dataset.toObject() : dataset, data: fullData };
+
+      const analysis = await geminiService.analyzeDataset(datasetWithFullData);
       analysisResults.push(analysis);
       if (progressUpdater) await progressUpdater(10 + Math.round((i / project.datasets.length) * 40), `Analizado dataset ${i + 1}/${project.datasets.length}`);
     }
 
     if (progressUpdater) await progressUpdater(55, 'Generando documentación con Gemini');
+    // Pasar datasets con datos completos para que la documentación refleje el 100% del dataset
+    const datasetsWithFullData = await Promise.all(
+      project.datasets.map(async (ds: any) => {
+        const fullData = await loadFullDatasetData(ds._id.toString(), ds.data);
+        return { ...(ds.toObject ? ds.toObject() : ds), data: fullData };
+      })
+    );
     const documentation = await geminiService.generateDocumentation(
-      project.datasets,
+      datasetsWithFullData,
       project.name,
       project.description
     );

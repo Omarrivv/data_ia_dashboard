@@ -105,8 +105,8 @@ export default function ProfilePage() {
   return (
     <div className="max-w-3xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Mi Perfil</h1>
-        <p className="text-gray-500 text-sm mt-1">Gestiona tu información personal y seguridad de la cuenta</p>
+        <h1 className="text-2xl font-bold text-white-900">Mi Perfil</h1>
+        <p className="text-white-500 text-sm mt-1">Gestiona tu información personal y seguridad de la cuenta</p>
       </div>
 
       {/* Avatar + stats */}

@@ -11,8 +11,8 @@ export interface GeminiRequestCacheDocument extends Document {
 const GeminiRequestCacheSchema = new Schema<GeminiRequestCacheDocument>({
   key: { type: String, required: true, unique: true, index: true },
   responseText: { type: String, required: true },
-  hitCount: { type: Number, default: 0, index: true },
-  lastAccessed: { type: Date, default: Date.now, index: true }
+  hitCount: { type: Number, default: 0 },
+  lastAccessed: { type: Date, default: Date.now }
 }, { timestamps: { createdAt: true, updatedAt: false } });
 
 // TTL index: expire cache entries after 30 days of inactivity
