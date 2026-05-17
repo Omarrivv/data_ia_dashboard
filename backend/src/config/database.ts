@@ -2,7 +2,10 @@ import mongoose from 'mongoose';
 
 export const connectDB = async (): Promise<void> => {
   try {
-    const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/dashboard-platform';
+    const mongoURI = process.env.MONGODB_URI;
+    if (!mongoURI) {
+      throw new Error('MONGODB_URI no está definida en las variables de entorno');
+    }
     
     const conn = await mongoose.connect(mongoURI);
     
@@ -35,3 +38,4 @@ export const disconnectDB = async (): Promise<void> => {
     console.error('❌ Error desconectando MongoDB:', error);
   }
 };
+

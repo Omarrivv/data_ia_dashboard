@@ -32,6 +32,7 @@ import {
 import { projectsApi, uploadApi, jobsApi } from '@/lib/api';
 import { Project, Dataset } from '@/types';
 import { ProjectChat } from '@/components/dashboard/ProjectChat';
+import { useTheme } from '@/contexts/ThemeContext';
 
 /** Convierte markdown básico (**negrita**, saltos de línea) en JSX */
 function renderMarkdown(text: string) {
@@ -153,6 +154,7 @@ export default function ProjectDetailPage() {
   const queryClient = useQueryClient();
   const projectId = params.id as string;
   const shareToken = searchParams.get('share') || undefined;
+  const { theme } = useTheme();
   
   const [activeTab, setActiveTab] = useState('overview');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -934,7 +936,7 @@ export default function ProjectDetailPage() {
               </div>
               <div className="p-6">
                 {project.dashboard && project.dashboard.widgets && project.dashboard.widgets.length > 0 ? (
-                  <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
                     {project.dashboard.widgets.map((widget: any) => {
                       // Obtener datos del primer dataset del proyecto
                       const rawData: any[] = project.datasets?.[0]?.data || [];
@@ -954,14 +956,14 @@ export default function ProjectDetailPage() {
                         .slice(0, 10)
                         .map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }));
 
-                      const axisLabelStyle = { fontSize: 11, fill: '#6b7280', fontWeight: 600 };
-                      const chartMargin = { top: 10, right: 20, left: 10, bottom: 44 };
-                      const tooltipStyle = { fontSize: 12, borderRadius: 8, border: '1px solid #e5e7eb' };
+                      const axisLabelStyle = { fontSize: 12, fill: '#9ca3af', fontWeight: 700 };
+                      const chartMargin = { top: 20, right: 30, left: 20, bottom: 60 };
+                      const tooltipStyle = { fontSize: 13, borderRadius: 12, border: 'none', boxShadow: '0 10px 25px rgba(0,0,0,0.2)', padding: '12px 16px', backgroundColor: '#1f2937', color: '#f3f4f6' };
 
                       return (
                         <div
                           key={widget.id}
-                          className="bg-white rounded-xl p-5 border border-gray-200 shadow-sm cursor-pointer group relative hover:border-blue-300 hover:shadow-md transition-all duration-150"
+                          className="bg-slate-800/50 dark:bg-slate-800/80 backdrop-blur rounded-2xl p-7 border border-slate-700/50 shadow-lg dark:shadow-slate-900/50 cursor-pointer group relative hover:border-slate-600 hover:shadow-xl dark:hover:shadow-slate-900/70 transition-all duration-200"
                           onDoubleClick={() => {
                             if (canEdit) {
                               handleOpenWidget(widget, rawData);
@@ -970,23 +972,23 @@ export default function ProjectDetailPage() {
                           title="Doble clic para analizar con IA"
                         >
                           {/* Double click hint badge */}
-                          <div className="pointer-events-none absolute top-3 right-3 opacity-0 transition-opacity group-hover:opacity-100">
-                            <span className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                              <SparklesIcon className="h-3 w-3" />
-                              Doble clic
+                          <div className="pointer-events-none absolute top-4 right-4 opacity-0 transition-opacity group-hover:opacity-100">
+                            <span className="inline-flex items-center gap-1 rounded-full border border-indigo-500/30 bg-indigo-500/20 px-3 py-1 text-xs font-semibold text-indigo-300">
+                              <SparklesIcon className="h-3.5 w-3.5" />
+                              Doble clic para editar
                             </span>
                           </div>
                           {/* Card header */}
-                          <h4 className="mb-0.5 text-sm font-semibold text-foreground">{widget.title}</h4>
-                          <p className="mb-4 leading-snug text-xs text-muted-foreground">{widget.description}</p>
+                          <h4 className="mb-2 text-lg font-bold text-white">{widget.title}</h4>
+                          <p className="mb-6 leading-relaxed text-sm text-slate-300">{widget.description}</p>
 
                           {chartData.length === 0 ? (
-                            <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
+                            <div className="flex h-64 items-center justify-center text-sm text-slate-400">
                               Sin datos para mostrar
                             </div>
                           ) : (
                             <>
-                              <ResponsiveContainer width="100%" height={240}>
+                              <ResponsiveContainer width="100%" height={280}>
                                 {chartType === 'pie' ? (
                                   <PieChart>
                                     <Pie
@@ -995,7 +997,7 @@ export default function ProjectDetailPage() {
                                       nameKey="name"
                                       cx="50%"
                                       cy="50%"
-                                      outerRadius={85}
+                                      outerRadius={95}
                                       label={({ name, percent }) =>
                                         `${name.length > 9 ? name.slice(0, 9) + '…' : name} (${(percent * 100).toFixed(0)}%)`
                                       }
@@ -1052,30 +1054,33 @@ export default function ProjectDetailPage() {
                                       labelFormatter={(label) => `${xKey}: ${label}`}
                                       formatter={(v: any) => [v.toLocaleString(), yKey]}
                                       contentStyle={tooltipStyle}
+                                      wrapperStyle={{ outline: 'none' }}
                                     />
-                                    <Area type="monotone" dataKey="value" stroke={colors[0]} fill={colors[0] + '30'} strokeWidth={2.5} />
+                                    <Area type="monotone" dataKey="value" stroke={colors[0]} fill={colors[0] + '40'} strokeWidth={3} />
                                   </AreaChart>
                                 ) : (
                                   <BarChart data={chartData} margin={chartMargin}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                                    <CartesianGrid strokeDasharray="4 4" stroke="#475569" opacity={0.3} />
                                     <XAxis
                                       dataKey="name"
-                                      tick={{ fontSize: 10 }}
-                                      tickFormatter={(v) => v.length > 9 ? v.slice(0, 9) + '…' : v}
-                                      label={{ value: xKey, position: 'insideBottom', offset: -28, style: axisLabelStyle }}
+                                      tick={{ fontSize: 12, fill: '#cbd5e1' }}
+                                      tickFormatter={(v) => v.length > 11 ? v.slice(0, 11) + '…' : v}
+                                      label={{ value: xKey, position: 'insideBottom', offset: -35, style: { ...axisLabelStyle, fill: '#cbd5e1' } }}
+                                      angle={-15}
                                     />
                                     <YAxis
-                                      tick={{ fontSize: 10 }}
-                                      width={55}
+                                      tick={{ fontSize: 12, fill: '#cbd5e1' }}
+                                      width={65}
                                       tickFormatter={(v) => typeof v === 'number' && v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v}
-                                      label={{ value: yKey, angle: -90, position: 'insideLeft', offset: 12, style: axisLabelStyle }}
+                                      label={{ value: yKey, angle: -90, position: 'insideLeft', offset: 15, style: { ...axisLabelStyle, fill: '#cbd5e1' } }}
                                     />
                                     <Tooltip
                                       labelFormatter={(label) => `${xKey}: ${label}`}
                                       formatter={(v: any) => [v.toLocaleString(), yKey]}
                                       contentStyle={tooltipStyle}
+                                      wrapperStyle={{ outline: 'none' }}
                                     />
-                                    <Bar dataKey="value" radius={[4, 4, 0, 0]} maxBarSize={48}>
+                                    <Bar dataKey="value" radius={[8, 8, 0, 0]} maxBarSize={56}>
                                       {chartData.map((_, i) => (
                                         <Cell key={i} fill={colors[i % colors.length]} />
                                       ))}
@@ -1086,18 +1091,18 @@ export default function ProjectDetailPage() {
 
                               {/* Axis legend badges */}
                               {chartType !== 'pie' && (
-                                <div className="flex items-center gap-3 mt-3 pt-3 border-t border-gray-100">
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="inline-flex items-center justify-center w-4 h-4 rounded bg-gray-200 text-gray-600 text-[9px] font-bold">X</span>
-                                    <span className="text-xs text-gray-500 font-medium">{xKey}</span>
+                                <div className="flex items-center gap-4 mt-5 pt-4 border-t border-slate-700/50">
+                                  <div className="flex items-center gap-2">
+                                    <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-slate-700 text-slate-300 text-xs font-bold">X</span>
+                                    <span className="text-sm text-slate-300 font-semibold">{xKey}</span>
                                   </div>
-                                  <div className="w-px h-3 bg-gray-200" />
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="inline-flex items-center justify-center w-4 h-4 rounded bg-blue-100 text-blue-600 text-[9px] font-bold">Y</span>
-                                    <span className="text-xs text-gray-500 font-medium">{yKey}</span>
+                                  <div className="w-px h-5 bg-slate-700/50" />
+                                  <div className="flex items-center gap-2">
+                                    <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600/50 text-indigo-300 text-xs font-bold">Y</span>
+                                    <span className="text-sm text-slate-300 font-semibold">{yKey}</span>
                                   </div>
                                   <div className="ml-auto">
-                                    <span className="text-[10px] text-gray-400 bg-gray-50 px-2 py-0.5 rounded border border-gray-100 capitalize">{chartType}</span>
+                                    <span className="text-xs font-bold text-slate-400 bg-slate-700/50 px-3 py-1 rounded-full border border-slate-600/50 capitalize">{chartType}</span>
                                   </div>
                                 </div>
                               )}
@@ -1134,26 +1139,187 @@ export default function ProjectDetailPage() {
               <div className="flex items-center justify-between border-b border-border bg-muted/40 px-6 py-4">
                 <h3 className="text-lg font-semibold text-foreground">Documentación del Proyecto</h3>
               </div>
-              <div className="max-h-[calc(100vh-280px)] overflow-y-auto bg-background/60">
+              <div className="max-h-[calc(100vh-280px)] overflow-y-auto">
                 {project.documentation ? (
-                  project.documentation.startsWith('<!DOCTYPE html>') || project.documentation.startsWith('<html') ? (
-                    <iframe
-                      srcDoc={sanitizeHtmlForIframe(project.documentation)}
-                      className="block w-full border-0 rounded-b-2xl"
-                      style={{ minHeight: '78vh', backgroundColor: 'transparent' }}
-                      title="Documentación del Proyecto"
-                      sandbox=""
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div className="p-6 prose max-w-none prose-invert dark:prose-invert">
-                      <pre className="whitespace-pre-wrap text-sm text-foreground">
-                        {project.documentation}
-                      </pre>
-                    </div>
-                  )
+                  <iframe
+                    srcDoc={`
+                      <!DOCTYPE html>
+                      <html lang="es">
+                      <head>
+                        <meta charset="UTF-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <title>Documentación</title>
+                        <style>
+                          * { margin: 0; padding: 0; box-sizing: border-box; }
+                          html, body {
+                            width: 100%;
+                            height: 100%;
+                          }
+                          body {
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+                            color: ${theme === 'dark' ? '#e2e8f0' : '#1e293b'};
+                            background: ${theme === 'dark' ? '#0f172a' : '#f8fafc'};
+                            line-height: 1.8;
+                            font-size: 15px;
+                            padding: 32px;
+                            letter-spacing: 0.3px;
+                          }
+                          h1, h2, h3, h4, h5, h6 {
+                            margin-top: 28px;
+                            margin-bottom: 16px;
+                            font-weight: 700;
+                            line-height: 1.2;
+                            color: ${theme === 'dark' ? '#f1f5f9' : '#0f172a'};
+                            letter-spacing: -0.5px;
+                          }
+                          h1 { 
+                            font-size: 32px; 
+                            margin-top: 0; 
+                            margin-bottom: 24px;
+                            padding-bottom: 16px;
+                            border-bottom: 3px solid ${theme === 'dark' ? '#1e293b' : '#e2e8f0'};
+                          }
+                          h2 { 
+                            font-size: 26px; 
+                            border-bottom: 2px solid ${theme === 'dark' ? '#1e293b' : '#e2e8f0'}; 
+                            padding-bottom: 12px;
+                          }
+                          h3 { font-size: 22px; color: ${theme === 'dark' ? '#cbd5e1' : '#334155'}; }
+                          h4 { font-size: 18px; }
+                          h5 { font-size: 16px; font-weight: 600; }
+                          h6 { font-size: 15px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+                          
+                          p { 
+                            margin-bottom: 16px; 
+                            color: ${theme === 'dark' ? '#cbd5e1' : '#475569'};
+                            line-height: 1.8;
+                          }
+                          
+                          ul, ol { 
+                            margin-left: 32px; 
+                            margin-bottom: 16px;
+                          }
+                          li { 
+                            margin-bottom: 8px; 
+                            color: ${theme === 'dark' ? '#cbd5e1' : '#475569'};
+                            line-height: 1.7;
+                          }
+                          
+                          a { 
+                            color: ${theme === 'dark' ? '#60a5fa' : '#2563eb'}; 
+                            text-decoration: none;
+                            font-weight: 500;
+                            border-bottom: 1px solid ${theme === 'dark' ? '#1e40af' : '#bfdbfe'};
+                            transition: all 0.2s ease;
+                          }
+                          a:hover { 
+                            color: ${theme === 'dark' ? '#93c5fd' : '#1d4ed8'};
+                            border-bottom-color: ${theme === 'dark' ? '#60a5fa' : '#2563eb'};
+                          }
+                          
+                          code {
+                            background-color: ${theme === 'dark' ? '#1e293b' : '#f1f5f9'};
+                            color: ${theme === 'dark' ? '#e2e8f0' : '#0f172a'};
+                            padding: 3px 8px;
+                            border-radius: 4px;
+                            font-family: 'Monaco', 'Courier New', monospace;
+                            font-size: 14px;
+                            font-weight: 500;
+                            letter-spacing: 0.2px;
+                          }
+                          
+                          pre {
+                            background-color: ${theme === 'dark' ? '#1e293b' : '#f1f5f9'};
+                            color: ${theme === 'dark' ? '#e2e8f0' : '#0f172a'};
+                            padding: 16px;
+                            border-radius: 8px;
+                            overflow-x: auto;
+                            margin-bottom: 16px;
+                            border-left: 4px solid ${theme === 'dark' ? '#3b82f6' : '#2563eb'};
+                            font-family: 'Monaco', 'Courier New', monospace;
+                            font-size: 13px;
+                            line-height: 1.6;
+                          }
+                          
+                          table {
+                            border-collapse: collapse;
+                            margin-bottom: 16px;
+                            width: 100%;
+                            border: 1px solid ${theme === 'dark' ? '#334155' : '#cbd5e1'};
+                            border-radius: 8px;
+                            overflow: hidden;
+                          }
+                          th, td {
+                            border: 1px solid ${theme === 'dark' ? '#334155' : '#cbd5e1'};
+                            padding: 12px 16px;
+                            text-align: left;
+                          }
+                          th {
+                            background-color: ${theme === 'dark' ? '#1e293b' : '#f1f5f9'};
+                            font-weight: 700;
+                            color: ${theme === 'dark' ? '#f1f5f9' : '#0f172a'};
+                            text-transform: uppercase;
+                            font-size: 13px;
+                            letter-spacing: 0.5px;
+                          }
+                          td {
+                            background-color: ${theme === 'dark' ? '#0f172a' : '#ffffff'};
+                            color: ${theme === 'dark' ? '#cbd5e1' : '#475569'};
+                          }
+                          tr:nth-child(even) td {
+                            background-color: ${theme === 'dark' ? '#1a1f3a' : '#f8fafc'};
+                          }
+                          
+                          blockquote {
+                            border-left: 4px solid ${theme === 'dark' ? '#3b82f6' : '#2563eb'};
+                            margin-left: 0;
+                            padding-left: 16px;
+                            color: ${theme === 'dark' ? '#94a3b8' : '#64748b'};
+                            font-style: italic;
+                            margin-bottom: 16px;
+                            background-color: ${theme === 'dark' ? '#1e293b' : '#f1f5f9'};
+                            padding: 16px;
+                            border-radius: 6px;
+                          }
+                          
+                          strong { 
+                            font-weight: 700; 
+                            color: ${theme === 'dark' ? '#f1f5f9' : '#0f172a'};
+                          }
+                          em { 
+                            font-style: italic;
+                            color: ${theme === 'dark' ? '#cbd5e1' : '#475569'};
+                          }
+                          
+                          hr {
+                            border: none;
+                            height: 2px;
+                            background: ${theme === 'dark' ? '#1e293b' : '#e2e8f0'};
+                            margin: 28px 0;
+                          }
+                          
+                          img {
+                            max-width: 100%;
+                            height: auto;
+                            border-radius: 8px;
+                            margin: 16px 0;
+                            box-shadow: 0 4px 12px ${theme === 'dark' ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.1)'};
+                          }
+                        </style>
+                      </head>
+                      <body>
+                        ${project.documentation}
+                      </body>
+                      </html>
+                    `}
+                    className="block w-full border-0 rounded-b-2xl"
+                    style={{ minHeight: '78vh', backgroundColor: 'transparent' }}
+                    title="Documentación del Proyecto"
+                    sandbox="allow-same-origin"
+                    referrerPolicy="no-referrer"
+                  />
                 ) : (
-                  <div className="py-12 text-center">
+                  <div className="py-12 text-center bg-muted/30">
                     <DocumentTextIcon className="mx-auto h-12 w-12 text-muted-foreground" />
                     <h3 className="mt-2 text-sm font-medium text-foreground">Sin documentación</h3>
                     <p className="mt-1 text-sm text-muted-foreground">
@@ -1638,12 +1804,101 @@ function sanitizeHtmlForIframe(html: string): string {
   safeHtml = safeHtml.replace(/<iframe[\s\S]*?>[\s\S]*?<\/iframe>/gi, '');
   safeHtml = safeHtml.replace(/<object[\s\S]*?>[\s\S]*?<\/object>/gi, '');
   safeHtml = safeHtml.replace(/<embed[\s\S]*?>/gi, '');
-  safeHtml = safeHtml.replace(/<link[\s\S]*?>/gi, '');
+  // KEEP <link> for external stylesheets (they're safe)
   safeHtml = safeHtml.replace(/\son\w+\s*=\s*"[^"]*"/gi, '');
   safeHtml = safeHtml.replace(/\son\w+\s*=\s*'[^']*'/gi, '');
   safeHtml = safeHtml.replace(/\son\w+\s*=\s*[^\s>]+/gi, '');
   safeHtml = safeHtml.replace(/(href|src)\s*=\s*"\s*javascript:[^"]*"/gi, '$1="#"');
   safeHtml = safeHtml.replace(/(href|src)\s*=\s*'\s*javascript:[^']*'/gi, '$1="#"');
+
+  // Inyectar estilos CSS globales y dark mode
+  const cssInjection = `<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+      color: #1f2937;
+      background: #ffffff;
+    }
+    h1, h2, h3, h4, h5, h6 { 
+      margin: 1.5rem 0 0.75rem;
+      font-weight: 600;
+      line-height: 1.2;
+      color: #111827;
+    }
+    h1 { font-size: 2rem; }
+    h2 { font-size: 1.5rem; }
+    h3 { font-size: 1.25rem; }
+    h4 { font-size: 1.1rem; }
+    p { margin: 0.75rem 0; }
+    a { color: #3b82f6; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    table { 
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1.5rem 0;
+      border: 1px solid #e5e7eb;
+      border-radius: 0.5rem;
+      overflow: hidden;
+    }
+    th { 
+      background: #f3f4f6;
+      padding: 0.75rem;
+      text-align: left;
+      font-weight: 600;
+      border: 1px solid #e5e7eb;
+      color: #111827;
+    }
+    td { 
+      padding: 0.75rem;
+      border: 1px solid #e5e7eb;
+      color: #4b5563;
+    }
+    tr:nth-child(even) { background: #f9fafb; }
+    code { 
+      background: #f3f4f6;
+      padding: 0.2rem 0.4rem;
+      border-radius: 0.25rem;
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 0.9rem;
+      color: #7c3aed;
+    }
+    pre { 
+      background: #1f2937;
+      color: #f3f4f6;
+      padding: 1rem;
+      border-radius: 0.5rem;
+      overflow-x: auto;
+      margin: 1.5rem 0;
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+    pre code { 
+      background: none;
+      color: #f3f4f6;
+      padding: 0;
+    }
+    ul, ol { margin: 1rem 0; padding-left: 2rem; }
+    li { margin: 0.5rem 0; }
+    blockquote {
+      border-left: 4px solid #3b82f6;
+      padding-left: 1rem;
+      margin: 1.5rem 0;
+      color: #6b7280;
+      font-style: italic;
+    }
+    img { max-width: 100%; height: auto; margin: 1.5rem 0; }
+  </style>`;
+
+  // Inyectar CSS al principio del HTML
+  if (safeHtml.includes('</head>')) {
+    safeHtml = safeHtml.replace('</head>', `${cssInjection}</head>`);
+  } else if (safeHtml.includes('</html>')) {
+    safeHtml = safeHtml.replace('</html>', `${cssInjection}</html>`);
+  } else {
+    safeHtml = `<!DOCTYPE html><html><head>${cssInjection}</head><body>${safeHtml}</body></html>`;
+  }
 
   return safeHtml;
 }

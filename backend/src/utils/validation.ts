@@ -4,9 +4,10 @@ const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]/g;
 const TAG_PATTERN = /<[^>]*>/g;
 const SAFE_FILENAME_PATTERN = /[^a-zA-Z0-9._-]+/g;
 
-export const MAX_UPLOAD_ROWS = 5000;
-export const MAX_UPLOAD_COLUMNS = 100;
-export const MAX_UPLOAD_CELL_LENGTH = 5000;
+// Removed row limit - accept unlimited rows
+// export const MAX_UPLOAD_ROWS = 5000;
+export const MAX_UPLOAD_COLUMNS = 200; // Increased from 100 to allow more columns
+export const MAX_UPLOAD_CELL_LENGTH = 10000; // Increased from 5000
 
 export const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -58,10 +59,7 @@ export const sanitizeFilename = (filename: string, fallback = 'upload'): string 
 };
 
 export const validateDatasetRows = (rows: unknown[]): void => {
-  if (rows.length > MAX_UPLOAD_ROWS) {
-    throw new Error(`El archivo excede el máximo de ${MAX_UPLOAD_ROWS} filas permitidas`);
-  }
-
+  // No row limit - accept unlimited rows
   rows.forEach((row, rowIndex) => {
     if (!isPlainObject(row)) {
       throw new Error(`La fila ${rowIndex + 1} no contiene un objeto válido`);

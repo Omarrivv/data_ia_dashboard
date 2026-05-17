@@ -78,7 +78,7 @@ export default function LoginPage() {
                   {...register('email')}
                   type="email"
                   autoComplete="email"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 placeholder:text-gray-400 caret-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   placeholder="tu@email.com"
                 />
                 {errors.email && (
@@ -95,7 +95,7 @@ export default function LoginPage() {
                     {...register('password')}
                     type={showPassword ? 'text' : 'password'}
                     autoComplete="current-password"
-                    className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg bg-white text-gray-900 placeholder:text-gray-400 caret-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="Tu contraseña"
                   />
                   <button

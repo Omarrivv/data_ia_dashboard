@@ -191,6 +191,47 @@ class GeminiService {
   }
 
   /**
+   * Computes full statistical aggregates from ALL rows.
+   * This is the correct approach — never send raw rows to an LLM, send statistics.
+   */
+  private computeFullStats(dataset: Dataset): string {
+    const allData: any[] = dataset.data;
+    const columns = dataset.metadata.columns;
+    const lines: string[] = [];
+
+    for (const col of columns) {
+      const values = allData.map(r => r[col.name]).filter(v => v !== null && v !== undefined && v !== '');
+
+      if (col.type === 'number') {
+        const nums = values.map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
+        if (nums.length === 0) continue;
+        const sum = nums.reduce((a, b) => a + b, 0);
+        const mean = sum / nums.length;
+        const median = nums.length % 2 === 0
+          ? (nums[nums.length / 2 - 1] + nums[nums.length / 2]) / 2
+          : nums[Math.floor(nums.length / 2)];
+        const variance = nums.reduce((acc, v) => acc + Math.pow(v - mean, 2), 0) / nums.length;
+        const stdDev = Math.sqrt(variance);
+        const p25 = nums[Math.floor(nums.length * 0.25)];
+        const p75 = nums[Math.floor(nums.length * 0.75)];
+        lines.push(
+          `${col.name} [NUMÉRICA]: n=${nums.length}, min=${nums[0].toFixed(2)}, p25=${p25.toFixed(2)}, ` +
+          `mediana=${median.toFixed(2)}, media=${mean.toFixed(2)}, p75=${p75.toFixed(2)}, ` +
+          `max=${nums[nums.length - 1].toFixed(2)}, stdDev=${stdDev.toFixed(2)}`
+        );
+      } else if (col.type === 'string') {
+        const freq: Record<string, number> = {};
+        for (const v of values) { freq[String(v)] = (freq[String(v)] || 0) + 1; }
+        const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
+        const top5 = sorted.slice(0, 5).map(([k, c]) => `${k}:${c}(${((c / allData.length) * 100).toFixed(1)}%)`).join(', ');
+        lines.push(`${col.name} [CATEGÓRICA]: ${sorted.length} valores únicos, top5→ ${top5}`);
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
    * Crea el prompt para análisis de datos
    */
   private createAnalysisPrompt(dataset: Dataset): string {
@@ -199,10 +240,10 @@ class GeminiService {
     const categoricalCols = columns.filter(c => c.type === 'string');
     const dateCols = columns.filter(c => c.type === 'date');
 
-    // Calcular cardinalidad aproximada de columnas categóricas usando la muestra
-    const sampleData = dataset.data.slice(0, 50);
+    // Calcular cardinalidad real desde TODOS los datos
+    const allData: any[] = dataset.data;
     const categoricalWithCardinality = categoricalCols.map(col => {
-      const uniqueVals = new Set(sampleData.map((row: any) => row[col.name])).size;
+      const uniqueVals = new Set(allData.map((row: any) => row[col.name])).size;
       return { name: col.name, approxUnique: uniqueVals };
     });
 
@@ -224,17 +265,24 @@ class GeminiService {
       ...dateCols.map(c => `  - ${c.name} [FECHA] → apta para eje X en series temporales`),
     ].join('\n');
 
-    const sampleStr = JSON.stringify(sampleData.slice(0, 5), null, 2);
+    // Estadísticas reales calculadas sobre el 100% de las filas
+    const fullStats = this.computeFullStats(dataset);
+
+    // Muestra representativa (5 filas)
+    const sampleStr = JSON.stringify(allData.slice(0, 5), null, 2);
 
     return `Eres un experto en análisis de datos y visualización. Analiza el siguiente dataset y genera visualizaciones con SENTIDO REAL para el negocio.
 
 DATASET: "${dataset.originalName}"
-Registros totales: ${dataset.metadata.rowCount.toLocaleString()}
+Registros totales: ${dataset.metadata.rowCount.toLocaleString()} (estadísticas calculadas sobre el 100% de los datos)
 
 COLUMNAS DISPONIBLES (lee con atención los tipos y restricciones):
 ${columnDetail}
 
-MUESTRA DE DATOS (5 registros):
+ESTADÍSTICAS REALES DEL 100% DE LOS DATOS (${dataset.metadata.rowCount.toLocaleString()} filas):
+${fullStats}
+
+MUESTRA REPRESENTATIVA (5 registros):
 ${sampleStr}
 
 REGLAS CRÍTICAS PARA LAS VISUALIZACIONES:
@@ -335,17 +383,18 @@ REQUISITOS OBLIGATORIOS:
    */
   private createVisualizationPrompt(dataset: Dataset): string {
     const columns = dataset.metadata.columns;
-    const sampleData = dataset.data.slice(0, 30);
+    const allData: any[] = dataset.data; // 100% de los datos
 
     const numericColumns = columns.filter(col => col.type === 'number').map(col => col.name);
     const dateColumns = columns.filter(col => col.type === 'date').map(col => col.name);
 
     // Detectar columnas categóricas con baja cardinalidad (buenas para agrupar)
+    // Cardinalidad calculada sobre el 100% de los datos, no una muestra
     const idLikePattern = /^(id|_id|uuid|key|hash|code|ref|transaction|order|record|row|index|seq)/i;
     const categoricalGood = columns
       .filter(col => col.type === 'string')
       .map(col => {
-        const unique = new Set(sampleData.map((r: any) => r[col.name])).size;
+        const unique = new Set(allData.map((r: any) => r[col.name])).size;
         return { name: col.name, unique };
       })
       .filter(c => !idLikePattern.test(c.name) && c.unique <= 20)
@@ -354,7 +403,7 @@ REQUISITOS OBLIGATORIOS:
     const categoricalBad = columns
       .filter(col => col.type === 'string')
       .map(col => {
-        const unique = new Set(sampleData.map((r: any) => r[col.name])).size;
+        const unique = new Set(allData.map((r: any) => r[col.name])).size;
         return { name: col.name, unique };
       })
       .filter(c => idLikePattern.test(c.name) || c.unique > 20)

@@ -84,7 +84,7 @@ export default function RegisterPage() {
                   {...register('name')}
                   type="text"
                   autoComplete="name"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 placeholder:text-gray-400 caret-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   placeholder="Tu nombre completo"
                 />
                 {errors.name && (
@@ -100,7 +100,7 @@ export default function RegisterPage() {
                   {...register('email')}
                   type="email"
                   autoComplete="email"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 placeholder:text-gray-400 caret-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   placeholder="tu@email.com"
                 />
                 {errors.email && (
@@ -117,7 +117,7 @@ export default function RegisterPage() {
                     {...register('password')}
                     type={showPassword ? 'text' : 'password'}
                     autoComplete="new-password"
-                    className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg bg-white text-gray-900 placeholder:text-gray-400 caret-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="Mínimo 6 caracteres"
                   />
                   <button
@@ -146,7 +146,7 @@ export default function RegisterPage() {
                     {...register('confirmPassword')}
                     type={showConfirmPassword ? 'text' : 'password'}
                     autoComplete="new-password"
-                    className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg bg-white text-gray-900 placeholder:text-gray-400 caret-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="Repite tu contraseña"
                   />
                   <button
